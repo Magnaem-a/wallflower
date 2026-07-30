@@ -128,6 +128,28 @@
     return out;
   }
 
+  // Ownership of a row. `createdByMemberId` is what the admin API returns, but
+  // the client-side query has been seen to expose it under other names — and a
+  // silent mismatch means your own hide is counted and ranked but never
+  // recognised as yours, so hide mode reopens and the gate lets you commit again.
+  function ownerOf(row) {
+    return (
+      row.createdByMemberId ||
+      row.memberId ||
+      row.createdBy ||
+      (row.data && (row.data.member_id || row.data.memberId)) ||
+      null
+    );
+  }
+
+  var ownerLogged = false;
+
+  function logRowShape(row) {
+    if (ownerLogged || !row) return;
+    ownerLogged = true;
+    console.log('Wallflower: hide row keys', Object.keys(row), 'owner resolved as', ownerOf(row));
+  }
+
   function parseBlendJson(raw) {
     if (!raw) return {};
     try {
@@ -154,6 +176,8 @@
     var hides = results[0];
     var hits = results[1];
 
+    logRowShape(hides[0]);
+
     var endedAt = {};
     hits.forEach(function (spot) {
       var ref = spot.data && spot.data.hide;
@@ -171,7 +195,7 @@
 
         return {
           hideId: hide.id,
-          memberId: hide.createdByMemberId,
+          memberId: ownerOf(hide),
           createdAt: hide.createdAt,
           username: data.username,
           sceneId: data.scene_id,
@@ -1198,7 +1222,7 @@
 
     var mine = rows
       .filter(function (row) {
-        return row.createdByMemberId === memberId;
+        return ownerOf(row) === memberId;
       })
       .sort(function (a, b) {
         return new Date(b.createdAt) - new Date(a.createdAt);
@@ -1409,7 +1433,7 @@
 
       var spotRows = await fetchAll('spots', {});
       var mySpots = spotRows.filter(function (spot) {
-        return spot.createdByMemberId === memberId;
+        return ownerOf(spot) === memberId;
       });
 
       var myHide = ranked.filter(function (entry) {
