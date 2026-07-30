@@ -133,12 +133,17 @@
   // silent mismatch means your own hide is counted and ranked but never
   // recognised as yours, so hide mode reopens and the gate lets you commit again.
   function ownerOf(row) {
+    var data = row.data || {};
+
+    // The client-side query does not return ownership at all — only six keys,
+    // none of them the creator. So the member id is denormalised onto the row at
+    // commit time, inside the blend JSON, which is already a TEXT field holding
+    // an object. Same reason username is denormalised: what the admin API knows
+    // about a record is not what the browser gets to see.
+    var fromBlend = parseBlendJson(data.blend).memberId;
+
     return (
-      row.createdByMemberId ||
-      row.memberId ||
-      row.createdBy ||
-      (row.data && (row.data.member_id || row.data.memberId)) ||
-      null
+      row.createdByMemberId || row.memberId || row.createdBy || data.member_id || fromBlend || null
     );
   }
 
@@ -147,7 +152,13 @@
   function logRowShape(row) {
     if (ownerLogged || !row) return;
     ownerLogged = true;
-    console.log('Wallflower: hide row keys', Object.keys(row), 'owner resolved as', ownerOf(row));
+
+    if (!ownerOf(row)) {
+      console.warn(
+        'Wallflower: hide row has no resolvable owner — rows written before this ' +
+          'build cannot be attributed and will not count as yours. Delete them.'
+      );
+    }
   }
 
   function parseBlendJson(raw) {
@@ -1283,13 +1294,21 @@
           return;
         }
 
+        // memberId travels inside the blend so the row can be recognised as
+        // yours on read. applyBlend ignores the extra key.
+        var owned = {};
+        Object.keys(blend).forEach(function (k) {
+          owned[k] = blend[k];
+        });
+        owned.memberId = data.id;
+
         var payload = {
           avatar_id: avatarSlug || '',
           scene_id: sceneSlug,
           x: Number(position.x.toFixed(4)),
           y: Number(position.y.toFixed(4)),
           facing: blend.facing,
-          blend: JSON.stringify(blend),
+          blend: JSON.stringify(owned),
           username: (data.customFields || {})['user-name'] || 'someone',
         };
 
