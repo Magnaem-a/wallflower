@@ -39,24 +39,6 @@
   var sceneCounts = {};
   var selectedScene = null;
   var statusTimer = null;
-  var sceneBitmap = null;
-  var avatarTones = {};
-  var currentAvatar = null;
-
-  // Hide-mode state. The blend written here is the blend renderFigures reads
-  // back off committed hides, so the keys are the stored contract.
-  var blend = {
-    facing: 'front',
-    cutOff: 0,
-    cutTop: 0,
-    cutSide: 0,
-    size: 1,
-    mirror: false,
-    tint: null, // sampled ambient, kept for the match meter only
-  };
-
-  // Percent of the scroller, not the viewport — which is why x/y are DECIMAL.
-  var position = { x: 50, y: 60 };
 
   // -------------------------------------------------------------------------
   // DOM helpers
@@ -245,6 +227,113 @@
   }
 
   // -------------------------------------------------------------------------
+  // Blend
+  //
+  // Contract for the stringified JSON in `hides.blend`. Memberstack has no JSON
+  // field type, so it lives in TEXT. Both sides are in this file now, so the
+  // shape cannot drift between reader and writer.
+  //
+  //   facing   'front' | 'back'   "Facing you" / "Turned away"
+  //   cutOff   0-100              percent trimmed from the bottom
+  //   size     multiplier         0.92 = 92% of this scene's crowd figure height,
+  //                               not a percent of the scene — a figure is sized
+  //                               against the painted crowd around it
+  //   mirror   boolean
+  //   tint     '#rrggbb'          sampled from the patch behind the figure
+  //   strength 0-1
+  //   shade    -1..1              signed: positive darkens, negative lifts
+  //
+  // Depth was built and abandoned. A foreground cutout redraws each object
+  // complete, including the parts hidden behind crowd figures in the original,
+  // so stacking it back buries people who were standing in front. Alignment
+  // cannot fix it. Do not revisit.
+  // -------------------------------------------------------------------------
+
+  function applyBlend(figure, image, blend) {
+    var facing = blend.facing === 'back' ? 'back' : 'front';
+    var art = avatars[figure.dataset.avatar];
+    if (art && art[facing]) image.setAttribute('src', art[facing]);
+
+    var multiplier = typeof blend.size === 'number' ? blend.size : 1;
+    figure.style.height = crowdHeight * multiplier + '%';
+
+    // Lean was dropped. Rotating tipped the footprint and read as falling over;
+    // skewing sheared the artwork. Neither looked like a person standing at an
+    // angle, and a flat cut-out cannot really be leant without redrawing it.
+    figure.style.transform = blend.mirror ? 'scaleX(-1)' : '';
+
+    if (blend.cutOff) image.style.clipPath = 'inset(0 0 ' + blend.cutOff + '% 0)';
+    else image.style.clipPath = '';
+
+    // Tint pulls the figure toward whatever colour was sampled behind her.
+    // `color` blend mode alone replaces hue and saturation outright, which
+    // turns her flatly into that hue rather than making her belong — so it is
+    // paired with desaturation and capped below full. Losing vividness is most
+    // of what "blending in" is: an over-saturated figure reads as pasted on
+    // even at exactly the right hue.
+    // Without a sampled colour there is nothing true to blend toward, so tint
+    // and shade switch off entirely instead of falling back to grey.
+    var haveSample = !!blend.tint;
+    var strength = haveSample ? blend.strength || 0 : 0;
+    image.style.filter = strength ? 'saturate(' + (1 - strength * 0.55) + ')' : '';
+
+    var src = image.getAttribute('src');
+    var mask = src ? 'url("' + src + '")' : '';
+
+    function maskTo(node) {
+      if (!node || !mask) return;
+      node.style.webkitMaskImage = mask;
+      node.style.maskImage = mask;
+      node.style.webkitMaskSize = 'contain';
+      node.style.maskSize = 'contain';
+      node.style.webkitMaskPosition = 'center';
+      node.style.maskPosition = 'center';
+      node.style.webkitMaskRepeat = 'no-repeat';
+      node.style.maskRepeat = 'no-repeat';
+    }
+
+    var tint = one('[data-figure-tint]', figure);
+    if (tint) {
+      maskTo(tint);
+      tint.style.mixBlendMode = 'color';
+      tint.style.backgroundColor = blend.tint || 'transparent';
+      tint.style.opacity = strength * 0.7;
+    }
+
+    // Shade uses the sampled colour rather than black, because a surface in
+    // shadow takes on the colour of whatever is shading it. Darkening multiplies
+    // by the patch currently behind the figure, so it moves toward that colour
+    // instead of toward black; lightening screens with it, for a figure standing
+    // in the light rather than under it.
+    //
+    // Whatever colour that is comes entirely from the sample and changes as she
+    // is dragged — nothing here is fixed to a particular scene.
+    var amount = haveSample ? blend.shade || 0 : 0;
+    var shade = one('[data-figure-shade]', figure);
+
+    if (shade && !amount) shade.style.opacity = 0;
+
+    if (shade && amount) {
+      maskTo(shade);
+
+      // A wash toward the ambient colour, not a multiply.
+      //
+      // multiply is a light operation: it darkens by removing light, so it always
+      // trends toward black and the ambient hue barely survives — which is why
+      // shading read as a brightness slider. A normal-mode wash lerps the figure
+      // toward the surrounding colour instead, so a figure in a warm alcove goes
+      // warm and one in cold light goes cold. The light level still moves,
+      // because the wash colour is the ambient darkened or lifted.
+      shade.style.backgroundColor = shadeColour(hexToRgb(blend.tint), amount);
+      shade.style.mixBlendMode = 'normal';
+
+      // Capped below full so the figure never washes out to a flat silhouette —
+      // some of its own detail has to survive or it stops reading as a person.
+      shade.style.opacity = Math.min(Math.abs(amount), 1) * 0.8;
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // Placed players
   //
   // Only real players are DOM nodes — the crowd is painted into the image. So
@@ -347,8 +436,9 @@
   }
 
   // The member's own crop comes from their `cropped-avatar-url` custom field,
-  // which the avatar picker already wrote. The lookup is still needed for other
-  // players and for full-body art.
+  // which the avatar picker already wrote. Going through the CMS lookup for your
+  // own face added a dependency for no gain — the URL is on the member record.
+  // The lookup is still needed for other players and for full-body art.
   function paintFace(cropUrl, slug) {
     var url = cropUrl || (avatars[slug] && avatars[slug].crop);
     if (!url) return;
@@ -539,8 +629,22 @@
   }
 
   // -------------------------------------------------------------------------
-  // Scene sampling
+  // Hide mode
   // -------------------------------------------------------------------------
+
+  var blend = {
+    facing: 'front',
+    cutOff: 0,
+    size: 1,
+    mirror: false,
+    tint: null,
+    strength: 0,
+    shade: 0,
+  };
+
+  var position = { x: 50, y: 60 };
+  var currentAvatar = null;
+  var sceneBitmap = null;
 
   function showBoard() {
     var board = one('[data-board]');
@@ -549,9 +653,10 @@
     if (panel) panel.classList.remove('is-shown');
   }
 
-  // crossOrigin must be set before src or it has no effect. A tainted bitmap
-  // looks loaded but every sample throws, so readability is verified here rather
-  // than discovered later as silently grey output.
+  // The scene is drawn once into an offscreen canvas so the meter reads pixels
+  // without touching the DOM. crossOrigin must be set before src or the canvas
+  // taints and getImageData throws — which is why this loads its own copy rather
+  // than reusing the img already on the page.
   function loadScene() {
     var source = one('[data-scene-img]');
     if (!source) {
@@ -559,39 +664,57 @@
       return Promise.resolve(null);
     }
 
+    // Resolve through src, currentSrc and srcset. Webflow lazy-loads CMS images
+    // and renders a srcset, so the src attribute alone can be empty — reading it
+    // directly was almost certainly why the bitmap never loaded.
     var url = imageUrl(source);
     if (!url) {
       console.error('Wallflower: scene image has no resolvable URL');
       return Promise.resolve(null);
     }
 
-    return new Promise(function (resolve) {
-      var img = new Image();
-      img.crossOrigin = 'anonymous';
+    function attempt(useCors) {
+      return new Promise(function (resolve) {
+        var img = new Image();
 
-      img.onload = function () {
-        var canvas = document.createElement('canvas');
-        canvas.width = img.naturalWidth;
-        canvas.height = img.naturalHeight;
-        canvas.getContext('2d', { willReadFrequently: true }).drawImage(img, 0, 0);
+        // crossOrigin has to be set before src or it has no effect. With it, a
+        // server that omits CORS headers fails the load outright; without it the
+        // image loads but taints the canvas. Try clean first, then fall back so
+        // at least the failure mode is a readable error rather than nothing.
+        if (useCors) img.crossOrigin = 'anonymous';
 
-        try {
-          canvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, 1, 1);
-        } catch (err) {
-          console.error('Wallflower: scene bitmap tainted, colour matching disabled');
+        img.onload = function () {
+          var canvas = document.createElement('canvas');
+          canvas.width = img.naturalWidth;
+          canvas.height = img.naturalHeight;
+          canvas.getContext('2d', { willReadFrequently: true }).drawImage(img, 0, 0);
+          resolve(canvas);
+        };
+
+        img.onerror = function () {
           resolve(null);
-          return;
-        }
+        };
 
-        resolve(canvas);
-      };
+        img.src = url;
+      });
+    }
 
-      img.onerror = function () {
+    return attempt(true).then(function (canvas) {
+      if (!canvas) {
         console.error('Wallflower: scene image failed CORS load —', url);
-        resolve(null);
-      };
+        return null;
+      }
 
-      img.src = url;
+      // Verify pixels are actually readable; a tainted bitmap looks loaded but
+      // every sample throws, and the effects then run on grey fallbacks.
+      try {
+        canvas.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, 1, 1);
+      } catch (err) {
+        console.error('Wallflower: scene bitmap tainted, disabling colour effects');
+        return null;
+      }
+
+      return canvas;
     });
   }
 
@@ -617,7 +740,7 @@
     ];
   }
 
-  // Average colour and variance of the patch. Variance stands in for how busy
+  // Average colour plus variance of the patch. Variance stands in for how busy
   // the spot is: a flat wall varies little and hides nobody, a cluttered stall
   // varies a lot and hides anyone.
   function samplePatch(xPercent, yPercent) {
@@ -631,10 +754,10 @@
 
     var data;
     try {
-      data = sceneBitmap
-        .getContext('2d', { willReadFrequently: true })
-        .getImageData(left, top, SAMPLE_BOX, SAMPLE_BOX).data;
+      data = sceneBitmap.getContext('2d', { willReadFrequently: true }).getImageData(left, top, SAMPLE_BOX, SAMPLE_BOX).data;
     } catch (err) {
+      // A tainted canvas means the scene image loaded without CORS headers. The
+      // meter and the sampled colour both die here, so say so once.
       if (!samplePatch.warned) {
         samplePatch.warned = true;
         console.error('Wallflower: cannot read scene pixels (canvas tainted) —', err.message);
@@ -664,8 +787,10 @@
     return { mean: mean, hex: toHex(mean), variance: spread / pixels / 3 };
   }
 
-  // Average colour of an avatar's own art, weighted by alpha so only the visible
-  // silhouette counts. Cached per slug — the image does not change.
+  // Average colour of an avatar's own art, ignoring transparent pixels. Cached
+  // per slug — the image does not change, only what sits behind it.
+  var avatarTones = {};
+
   function loadAvatarTone(slug) {
     if (!slug || avatarTones[slug] !== undefined) return Promise.resolve(avatarTones[slug]);
 
@@ -693,9 +818,14 @@
           var wb = 0;
           var wa = 0;
 
-          // Weighted, not gated: these are cut-outs with anti-aliased edges, and
-          // a hard alpha cutoff counts a 60% edge pixel as fully present and a
-          // 40% one as absent.
+          // Weighted by alpha, not gated on it. These are cut-outs, so most of
+          // the box is transparent and the edges are anti-aliased. A hard cutoff
+          // counts a 60%-opaque edge pixel as fully present and a 40% one as
+          // absent, which drags the mean toward whatever the PNG carries in its
+          // fringe. Weighting means only what is actually visible contributes.
+          //
+          // Stepped rather than exhaustive: an average colour does not need
+          // every pixel.
           for (var i = 0; i < data.length; i += 40) {
             var a = data[i + 3] / 255;
             if (!a) continue;
@@ -721,78 +851,109 @@
     });
   }
 
-  // -------------------------------------------------------------------------
-  // Blend
+  // --- compositing model -----------------------------------------------------
   //
-  // Contract for the stringified JSON in `hides.blend`. Memberstack has no JSON
-  // field type, so it lives in TEXT. Both sides are in this file now, so the
-  // shape cannot drift between reader and writer.
+  // Mirrors what the CSS actually does, in order:
+  //   1. filter: saturate()          on the image
+  //   2. mix-blend-mode: color       tint layer, at opacity
+  //   3. normal-mode wash            shade layer, at opacity
   //
-  //   facing   'front' | 'back'   "Facing you" / "Turned away"
-  //   cutOff   0-100              percent trimmed from the bottom
-  //   size     multiplier         0.92 = 92% of this scene's crowd figure height,
-  //                               not a percent of the scene — a figure is sized
-  //                               against the painted crowd around it
-  //   mirror   boolean
-  //   cutTop   0-45              percent trimmed from the top
-  //   cutSide  -30..30           signed: negative clips the right edge
-  //   tint     '#rrggbb'          sampled ambient, kept for the match meter only
+  // Steps 1 and 3 are channel arithmetic. Step 2 is a non-separable blend from
+  // the compositing spec — it takes hue and saturation
+  // from the source and keeps the backdrop's luminosity — so a channel lerp
+  // toward the tint drifts, most visibly at high strength where the backdrop
+  // has already been desaturated.
   //
-  // Depth was built and abandoned. A foreground cutout redraws each object
-  // complete, including the parts hidden behind crowd figures in the original,
-  // so stacking it back buries people who were standing in front. Alignment
-  // cannot fix it. Do not revisit.
-  // -------------------------------------------------------------------------
+  // Note the two luma formulas differ and are not interchangeable: the saturate
+  // filter uses Rec.709 coefficients, the blend spec's Lum() uses its own.
 
-  function applyBlend(figure, image, blend) {
-    var facing = blend.facing === 'back' ? 'back' : 'front';
-    var art = avatars[figure.dataset.avatar];
-    if (art && art[facing]) image.setAttribute('src', art[facing]);
-
-    var multiplier = typeof blend.size === 'number' ? blend.size : 1;
-    figure.style.height = crowdHeight * multiplier + '%';
-
-    // Lean was dropped. Rotating tipped the footprint and read as falling over;
-    // skewing sheared the artwork. Neither looked like a person standing at an
-    // angle, and a flat cut-out cannot really be leant without redrawing it.
-    figure.style.transform = blend.mirror ? 'scaleX(-1)' : '';
-
-    // Occlusion: standing behind something, trimmed from any edge. Capped so a
-    // figure can be partly hidden but never erased — past roughly a quarter it
-    // stops reading as "behind the hedge" and starts reading as "gone".
-    var top = blend.cutTop || 0;
-    var bottom = blend.cutOff || 0;
-    var side = blend.cutSide || 0;
-    var left = side > 0 ? side : 0;
-    var right = side < 0 ? -side : 0;
-
-    image.style.clipPath =
-      top || bottom || side
-        ? 'inset(' + top + '% ' + right + '% ' + bottom + '% ' + left + '%)'
-        : '';
-
-    // Tint pulls the figure toward whatever colour was sampled behind her.
-    // `color` blend mode alone replaces hue and saturation outright, which
-    // turns her flatly into that hue rather than making her belong — so it is
-    // paired with desaturation and capped below full. Losing vividness is most
-    // of what "blending in" is: an over-saturated figure reads as pasted on
-    // even at exactly the right hue.
-    // No filters and no overlays. Colour blending is gone: a flat wash over a
-    // cut-out never read as belonging, and the overlay layers were the source of
-    // the see-through figure.
-    image.style.filter = '';
-    image.style.mixBlendMode = 'normal';
-    image.style.opacity = 1;
-
-    var tint = one('[data-figure-tint]', figure);
-    if (tint) tint.style.opacity = 0;
-
-    var shade = one('[data-figure-shade]', figure);
-    if (shade) shade.style.opacity = 0;
+  function blendLum(c) {
+    return 0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2];
   }
 
-  // The figure renders as its own art now, so its tone is simply its average
-  // colour — no compositing model to approximate.
+  function clipColor(c) {
+    var l = blendLum(c);
+    var lo = Math.min(c[0], c[1], c[2]);
+    var hi = Math.max(c[0], c[1], c[2]);
+
+    if (lo < 0) {
+      c = c.map(function (v) {
+        return l + ((v - l) * l) / (l - lo);
+      });
+    }
+
+    if (hi > 255) {
+      c = c.map(function (v) {
+        return l + ((v - l) * (255 - l)) / (hi - l);
+      });
+    }
+
+    return c;
+  }
+
+  function setLum(c, l) {
+    var d = l - blendLum(c);
+    return clipColor([c[0] + d, c[1] + d, c[2] + d]);
+  }
+
+  // color(backdrop, source) = SetLum(source, Lum(backdrop))
+  function blendColorMode(backdrop, source) {
+    return setLum(source.slice(), blendLum(backdrop));
+  }
+
+  // The colour the shade layer washes toward: the ambient, darkened for shadow
+  // or lifted for light. Shared by the renderer and the meter so the two cannot
+  // describe different things.
+  function shadeToward(tint, amount) {
+    var base = tint; // callers only reach this with a real sampled colour
+
+    return amount >= 0
+      ? base.map(function (c) {
+          return c * 0.45;
+        })
+      : base.map(function (c) {
+          return c + (255 - c) * 0.55;
+        });
+  }
+
+  function shadeColour(tint, amount) {
+    return (
+      'rgb(' +
+      shadeToward(tint, amount)
+        .map(function (c) {
+          return Math.round(c);
+        })
+        .join(',') +
+      ')'
+    );
+  }
+
+  function mix(a, b, t) {
+    return a.map(function (c, i) {
+      return c + (b[i] - c) * t;
+    });
+  }
+
+  function effectiveTone(avg, tint, strength, shade) {
+    // 1. saturate() — Rec.709 luma, lerping each channel toward it
+    var luma = 0.213 * avg[0] + 0.715 * avg[1] + 0.072 * avg[2];
+    var keep = 1 - strength * 0.55;
+
+    var out = avg.map(function (c) {
+      return luma + (c - luma) * keep;
+    });
+
+    // 2. tint layer: color blend, then composited at the layer's opacity
+    if (tint) {
+      out = mix(out, blendColorMode(out, tint), strength * 0.7);
+    }
+
+    if (!shade) return out;
+
+    // 3. shade layer: a normal-mode wash toward the ambient, so plain alpha
+    //    compositing — a straight lerp, matching what the renderer now does.
+    return mix(out, shadeToward(tint, shade), Math.min(Math.abs(shade), 1) * 0.8);
+  }
 
   // How hidden the figure actually is, from things that genuinely affect being
   // spotted:
@@ -817,7 +978,12 @@
 
     var closeness;
     if (tone) {
-      var rendered = tone;
+      var rendered = effectiveTone(
+        tone,
+        hexToRgb(blend.tint),
+        blend.strength || 0,
+        blend.shade || 0
+      );
       var distance =
         Math.abs(rendered[0] - patch.mean[0]) +
         Math.abs(rendered[1] - patch.mean[1]) +
@@ -829,15 +995,6 @@
       closeness = busy;
     }
 
-    // Occlusion — being physically behind something. The strongest hiding move
-    // available, and the meter ignored it entirely until now. Each cut is capped
-    // at its own slider maximum, so this is the fraction of the available
-    // concealment actually used.
-    var occluded = Math.min(
-      (blend.cutOff || 0) / 25 + (blend.cutTop || 0) / 45 + Math.abs(blend.cutSide || 0) / 30,
-      1
-    );
-
     var facing = blend.facing === 'back' ? 1 : 0.75;
 
     // A figure far off the crowd's scale reads as wrong however well it matches.
@@ -845,10 +1002,7 @@
     var scale = 1 - offScale * 0.5;
 
     return Math.round(
-      Math.max(
-        0,
-        Math.min((occluded * 0.35 + busy * 0.35 + closeness * 0.3) * facing * scale, 1)
-      ) * 100
+      Math.max(0, Math.min((closeness * 0.55 + busy * 0.45) * facing * scale, 1)) * 100
     );
   }
 
@@ -897,6 +1051,9 @@
     if (meter) meter.style.width = score + '%';
 
     if (patch) {
+      var swatch = one('[data-sampled-colour]');
+      if (swatch) swatch.style.backgroundColor = patch.hex;
+
       // Always track the live sample. This used to assign only when tint was
       // unset, on the reasoning that a member might override it — but there is
       // no colour picker, so nothing ever did. The result was that the swatch
@@ -909,14 +1066,14 @@
     }
 
     setText('[data-value-cutoff]', Math.round(blend.cutOff) + '%');
-    setText('[data-value-cuttop]', Math.round(blend.cutTop) + '%');
-    setText('[data-value-cutside]', Math.round(Math.abs(blend.cutSide)) + '%');
-    fillTrack('[data-track-cuttop]', blend.cutTop / 45);
-    fillTrack('[data-track-cutside]', (blend.cutSide + 30) / 60);
     setText('[data-value-size]', blend.size.toFixed(2));
+    setText('[data-value-strength]', Math.round(blend.strength * 100) + '%');
+    setText('[data-value-shade]', Math.round(blend.shade * 100) + '%');
 
-    fillTrack('[data-track-cutoff]', blend.cutOff / 25);
+    fillTrack('[data-track-cutoff]', blend.cutOff / 100);
     fillTrack('[data-track-size]', (blend.size - 0.3) / 2.7);
+    fillTrack('[data-track-strength]', blend.strength);
+    fillTrack('[data-track-shade]', (blend.shade + 0.7) / 1.4);
 
     all('[data-facing-option]').forEach(function (option) {
       option.classList.toggle('is-selected', option.dataset.facingOption === blend.facing);
@@ -980,21 +1137,17 @@
   }
 
   function wireControls() {
-    dragTrack('[data-track-cuttop]', function (r) {
-      blend.cutTop = r * 45;
-    });
-
-    // Signed: left of centre clips from the left edge, right from the right, so
-    // one slider covers being behind a pillar on either side.
-    dragTrack('[data-track-cutside]', function (r) {
-      blend.cutSide = -30 + r * 60;
-    });
-
     dragTrack('[data-track-cutoff]', function (r) {
-      blend.cutOff = r * 25;
+      blend.cutOff = r * 100;
     });
     dragTrack('[data-track-size]', function (r) {
       blend.size = 0.3 + r * 2.7;
+    });
+    dragTrack('[data-track-strength]', function (r) {
+      blend.strength = r;
+    });
+    dragTrack('[data-track-shade]', function (r) {
+      blend.shade = -0.7 + r * 1.4;
     });
 
     all('[data-facing-option]').forEach(function (option) {
@@ -1013,28 +1166,62 @@
     }
   }
 
+  // One live hide per member, ever. Two separate rules:
+  //   already hidden anywhere  -> refuse outright
+  //   last hide ended under 24h -> refuse until the window passes
+  //
+  // Fails closed. This used to allow the write when the read threw, on the
+  // reasoning that a read error should not lock anyone out — but the read is the
+  // only thing standing between a member and a second figure, so an error has to
+  // mean "no", not "go ahead".
   async function canRelocate(api, memberId) {
+    var rows;
+    var hits;
+
     try {
-      var rows = await fetchAll('hides', {});
-      var mine = rows
-        .filter(function (row) {
-          return row.createdByMemberId === memberId;
-        })
-        .sort(function (a, b) {
-          return new Date(b.createdAt) - new Date(a.createdAt);
-        })[0];
-
-      if (!mine) return { allowed: true };
-
-      var elapsed = Date.now() - new Date(mine.createdAt).getTime();
-      if (elapsed >= RELOCATE_WINDOW_MS) return { allowed: true };
-
-      return { allowed: false, hours: Math.ceil((RELOCATE_WINDOW_MS - elapsed) / 3600000) };
+      var results = await Promise.all([
+        fetchAll('hides', {}),
+        fetchAll('spots', { result: { equals: 'hit' } }),
+      ]);
+      rows = results[0];
+      hits = results[1];
     } catch (err) {
-      // Better to let the write attempt and fail than lock someone out on a read
-      // error.
-      return { allowed: true };
+      return { allowed: false, reason: 'could not check your hides, try again' };
     }
+
+    var ended = {};
+    hits.forEach(function (spot) {
+      var ref = spot.data && spot.data.hide;
+      var id = ref && (ref.id || ref);
+      if (id) ended[id] = true;
+    });
+
+    var mine = rows
+      .filter(function (row) {
+        return row.createdByMemberId === memberId;
+      })
+      .sort(function (a, b) {
+        return new Date(b.createdAt) - new Date(a.createdAt);
+      });
+
+    var live = mine.filter(function (row) {
+      return !ended[row.id];
+    })[0];
+
+    if (live) {
+      var where = String((live.data && live.data.scene_id) || 'a scene').replace(/-/g, ' ');
+      return { allowed: false, reason: 'you are already hidden in the ' + where };
+    }
+
+    if (!mine.length) return { allowed: true };
+
+    var elapsed = Date.now() - new Date(mine[0].createdAt).getTime();
+    if (elapsed >= RELOCATE_WINDOW_MS) return { allowed: true };
+
+    return {
+      allowed: false,
+      reason: 'you can move again in ' + Math.ceil((RELOCATE_WINDOW_MS - elapsed) / 3600000) + 'h',
+    };
   }
 
   // createdAt and createdByMemberId are set server side, so the timer and the
@@ -1068,7 +1255,7 @@
 
         var gate = await canRelocate(api, data.id);
         if (!gate.allowed) {
-          setText('[data-commit-note]', 'you can move again in ' + gate.hours + 'h');
+          setText('[data-commit-note]', gate.reason);
           return;
         }
 
