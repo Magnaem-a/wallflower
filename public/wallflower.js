@@ -43,6 +43,21 @@
   var avatarTones = {};
   var currentAvatar = null;
 
+  // Hide-mode state. The blend written here is the blend renderFigures reads
+  // back off committed hides, so the keys are the stored contract.
+  var blend = {
+    facing: 'front',
+    cutOff: 0,
+    cutTop: 0,
+    cutSide: 0,
+    size: 1,
+    mirror: false,
+    tint: null, // sampled ambient, kept for the match meter only
+  };
+
+  // Percent of the scroller, not the viewport — which is why x/y are DECIMAL.
+  var position = { x: 50, y: 60 };
+
   // -------------------------------------------------------------------------
   // DOM helpers
   //
