@@ -880,32 +880,152 @@
   //
   // It still cannot score proximity to other figures: the crowd is painted into
   // the image, so standing in a group is indistinguishable from standing alone.
-  function scoreMatch(patch) {
+  // The figure's box in scroller percentages, so pixel work can be done against
+  // the same coordinate space the placement uses.
+  function figureBox(node) {
+    var scroller = one('[data-scroller]');
+    if (!scroller || !node) return null;
+
+    var sb = scroller.getBoundingClientRect();
+    var fb = node.getBoundingClientRect();
+    if (!sb.width || !sb.height || !fb.width) return null;
+
+    return {
+      x: ((fb.left - sb.left) / sb.width) * 100,
+      y: ((fb.top - sb.top) / sb.height) * 100,
+      w: (fb.width / sb.width) * 100,
+      h: (fb.height / sb.height) * 100,
+    };
+  }
+
+  // Local contrast of a strip of scene, 0..1. Standard deviation of luminance:
+  // flat paint scores near zero, an object edge scores high. This is how the
+  // script tells whether something is actually there.
+  function regionContrast(xPct, yPct, wPct, hPct) {
+    if (!sceneBitmap) return 0;
+
+    var W = sceneBitmap.width;
+    var H = sceneBitmap.height;
+
+    var x = Math.max(0, Math.min(Math.round((xPct / 100) * W), W - 2));
+    var y = Math.max(0, Math.min(Math.round((yPct / 100) * H), H - 2));
+    var w = Math.max(2, Math.min(Math.round((wPct / 100) * W), W - x));
+    var h = Math.max(2, Math.min(Math.round((hPct / 100) * H), H - y));
+
+    var data;
+    try {
+      data = sceneBitmap
+        .getContext('2d', { willReadFrequently: true })
+        .getImageData(x, y, w, h).data;
+    } catch (err) {
+      return 0;
+    }
+
+    var sum = 0;
+    var sumSq = 0;
+    var n = 0;
+
+    for (var i = 0; i < data.length; i += 4) {
+      var l = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+      sum += l;
+      sumSq += l * l;
+      n++;
+    }
+
+    if (!n) return 0;
+
+    var mean = sum / n;
+    var sd = Math.sqrt(Math.max(0, sumSq / n - mean * mean));
+
+    // 45 is about where scene contrast stops meaning anything more.
+    return Math.min(sd / 45, 1);
+  }
+
+  // Whether the cuts are standing on anything.
+  //
+  // A cut claims "something is in front of me here". Previously that was taken
+  // on trust, so dragging the side slider in open ground scored as hiding behind
+  // a pillar that did not exist. Now the strip of scene at each cut boundary is
+  // measured: an object edge there is high contrast, flat ground is not.
+  //
+  // Returns 1 when no cuts are set — there is nothing being claimed, so nothing
+  // to disprove.
+  function occlusionSupport(box) {
+    if (!box) return 1;
+
+    var strips = [];
+    var band = Math.max(box.h * 0.04, 0.6);
+
+    if (blend.cutOff) {
+      strips.push(
+        regionContrast(box.x, box.y + box.h * (1 - blend.cutOff / 100) - band / 2, box.w, band)
+      );
+    }
+
+    if (blend.cutTop) {
+      strips.push(
+        regionContrast(box.x, box.y + box.h * (blend.cutTop / 100) - band / 2, box.w, band)
+      );
+    }
+
+    if (blend.cutSide) {
+      var vBand = Math.max(box.w * 0.08, 0.4);
+      var edge =
+        blend.cutSide > 0
+          ? box.x + box.w * (blend.cutSide / 100)
+          : box.x + box.w * (1 + blend.cutSide / 100);
+      strips.push(regionContrast(edge - vBand / 2, box.y, vBand, box.h));
+    }
+
+    if (!strips.length) return 1;
+
+    var total = strips.reduce(function (a, b) {
+      return a + b;
+    }, 0);
+
+    // Never fully zero: a cut against flat ground still conceals something, it
+    // just should not score like standing behind a wall.
+    return 0.25 + 0.75 * (total / strips.length);
+  }
+
+  // How hidden the figure looks, from the two things a member actually controls
+  // here: what is in front of them, and what is behind them.
+  //
+  // Patch variance was weighted as "cover" and has been dropped. It cannot tell
+  // a crowd from a stack of crates — both read as busy — and for these avatars
+  // those are opposites. The art does not match the painted crowd, so standing
+  // among people highlights the mismatch; an open patch beside an object reads
+  // far more naturally. Scoring variance rewarded the worst spots.
+  //
+  // It still cannot verify that anything is actually there to hide behind: the
+  // side cut credits you for a pillar whether or not one exists. That is a
+  // limit of scoring from pixels, and worth knowing before trusting the number.
+  function scoreMatch(patch, box) {
     if (!patch) return 0;
 
-    var busy = Math.min(patch.variance / 60, 1); // variance flattens well before 255
-    var tone = avatarTones[currentAvatar];
+    // Occlusion — how much of you is behind something. Each cut measured against
+    // its own slider maximum.
+    var claimed = Math.min(
+      (blend.cutOff || 0) / 25 + (blend.cutTop || 0) / 45 + Math.abs(blend.cutSide || 0) / 30,
+      1
+    );
 
-    var closeness;
+    // Scaled by whether the scene actually supports the claim.
+    var occluded = claimed * occlusionSupport(box);
+
+    // Colour — your avatar's own average tone against the surface behind it.
+    // Fixed for a given avatar and spot, which is the point: it is a reason to
+    // stand somewhere rather than a slider to push.
+    var tone = avatarTones[currentAvatar];
+    var closeness = 0.5;
+
     if (tone) {
       var distance =
         Math.abs(tone[0] - patch.mean[0]) +
         Math.abs(tone[1] - patch.mean[1]) +
         Math.abs(tone[2] - patch.mean[2]);
       closeness = 1 - Math.min(distance / 400, 1);
-    } else {
-      // Without the avatar's own tone there is nothing honest to compare, so
-      // cover carries the score rather than inventing a colour term.
-      closeness = busy;
     }
-
-    // Occlusion — being physically behind something. The strongest hiding move
-    // available, so it carries as much weight as cover. Each cut is measured
-    // against its own slider maximum.
-    var occluded = Math.min(
-      (blend.cutOff || 0) / 25 + (blend.cutTop || 0) / 45 + Math.abs(blend.cutSide || 0) / 30,
-      1
-    );
 
     var facing = blend.facing === 'back' ? 1 : 0.75;
 
@@ -914,10 +1034,7 @@
     var scale = 1 - offScale * 0.5;
 
     return Math.round(
-      Math.max(
-        0,
-        Math.min((occluded * 0.35 + busy * 0.35 + closeness * 0.3) * facing * scale, 1)
-      ) * 100
+      Math.max(0, Math.min((occluded * 0.55 + closeness * 0.45) * facing * scale, 1)) * 100
     );
   }
 
@@ -960,7 +1077,7 @@
     var patch = samplePatch(sx, sy);
     if (patch) blend.tint = patch.hex;
 
-    var score = scoreMatch(patch);
+    var score = scoreMatch(patch, figureBox(node));
     setText('[data-meter-value]', score + '%');
     var meter = one('[data-meter-fill]');
     if (meter) meter.style.width = score + '%';
