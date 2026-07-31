@@ -200,6 +200,7 @@
 
     var endedAt = {};
     var endedBy = {};
+    var endedByAvatar = {};
 
     hits.forEach(function (spot) {
       var ref = spot.data && spot.data.hide;
@@ -207,6 +208,7 @@
       if (!id) return;
       endedAt[id] = spot.createdAt;
       endedBy[id] = spot.data && spot.data.username;
+      endedByAvatar[id] = spot.data && spot.data.avatar_id;
     });
 
     var now = Date.now();
@@ -232,6 +234,7 @@
           stillHidden: !endedAt[hide.id],
           endedAt: endedAt[hide.id] || null,
           foundBy: endedBy[hide.id] || null,
+          foundByAvatar: endedByAvatar[hide.id] || null,
         };
       })
       .sort(function (a, b) {
@@ -873,7 +876,11 @@
       var data = member && member.data;
       if (!data) throw new Error('not logged in');
 
+      // The seeker's avatar, so the person found can be shown who caught them.
+      var seekerJson = await memberJson(api);
+
       var payload = {
+        avatar_id: seekerJson.avatar || '',
         scene_id: sceneSlug,
         x: Number(target.x.toFixed(4)),
         y: Number(target.y.toFixed(4)),
