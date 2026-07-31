@@ -1363,6 +1363,20 @@
     return canvas;
   }
 
+  // Builds the composite in the background. Deliberately not awaited: it loads
+  // an image per placed figure, and the page must not wait on that.
+  function buildCompositeLater(hides) {
+    Promise.resolve()
+      .then(async function () {
+        if (!sceneBitmap) sceneBitmap = await loadScene();
+        compositeBitmap = await buildComposite(hides);
+      })
+      .catch(function (err) {
+        // Losing the composite costs the modal its crop, nothing else.
+        console.error('Wallflower: composite unavailable', err);
+      });
+  }
+
   // The figure's box in scroller percentages, so pixel work can be done against
   // the same coordinate space the placement uses.
   function figureBox(node) {
@@ -2069,16 +2083,18 @@
         willPlace: forced || (!myHide && selectedScene === sceneSlug),
       });
 
-      // The composite needs the scene pixels, which hide mode loads. Outside hide
-      // mode it is loaded here so the spot modal has something to crop from.
-      if (!sceneBitmap) sceneBitmap = await loadScene();
-      compositeBitmap = await buildComposite(ranked);
-
+      // Paint first. Everything here comes from data already in hand and needs
+      // no network, so nothing that can stall belongs in front of it — an image
+      // load that never settles used to leave the board on its placeholder rows.
       paintTabs();
       paintHud(mySpots);
       paintBoard(ranked, memberId);
       renderFigures(ranked);
       hideSkeletons();
+
+      // The composite is only needed when the spot modal opens, so it is built
+      // after the page is usable and its failure cannot hold anything back.
+      buildCompositeLater(ranked);
 
       await checkFound(api, memberId, ranked, json);
 
