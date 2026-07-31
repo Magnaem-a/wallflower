@@ -1985,11 +1985,17 @@
 
   // -------------------------------------------------------------------------
 
-  // Skeletons. Anything carrying [data-skeleton] gets a pulsing cover from the
-  // moment the script runs until the data it waits for has actually painted —
-  // not a fixed timer, which lifts too early on a slow read and too late on a
-  // fast one. The board also rebuilds its children, so covers live on the
-  // containers, never inside them.
+  // Skeletons. Anything carrying [data-skeleton] gets a cover from the moment
+  // the script runs until the data it waits for has actually painted — not a
+  // fixed timer, which lifts too early on a slow read and too late on a fast
+  // one.
+  //
+  // The cover sits on the game shell rather than on each piece, so the scene and
+  // the figures appear together. Revealing the scene first and populating the
+  // figures a moment later showed exactly where the players were.
+  //
+  // The sweep itself is CSS, in the page head — Webflow's style tool cannot hold
+  // keyframes.
   function showSkeletons() {
     all('[data-skeleton]').forEach(function (node) {
       var cover = document.createElement('div');
