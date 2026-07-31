@@ -866,7 +866,7 @@
 
     var confirmButton = one('[data-spot-confirm]');
     if (confirmButton) confirmButton.style.pointerEvents = 'none';
-    setText('[data-spot-calls]', 'calling it…');
+    setText('[data-spot-calls]', 'calling it\u2026');
 
     try {
       var member = await api.getCurrentMember();
@@ -1271,6 +1271,29 @@
   // Note the two luma formulas differ and are not interchangeable: the saturate
   // filter uses Rec.709 coefficients, the blend spec's Lum() uses its own.
 
+
+
+
+
+
+
+
+
+  // How hidden the figure actually is, from things that genuinely affect being
+  // spotted:
+  //   how close its rendered colour is to the patch behind it
+  //   how busy that patch is — cover
+  //   whether its face is showing
+  //   whether it is scaled anywhere near the painted crowd
+  //
+  // Deliberately not scored on how far the sliders have been pushed. Tint now
+  // always equals the sample, so comparing tint to the patch would return a
+  // perfect match every time and tell the player nothing. Rewarding slider
+  // movement would be worse — it would report "well hidden" for effort rather
+  // than for result.
+  //
+  // It still cannot score proximity to other figures: the crowd is painted into
+  // the image, so standing in a group is indistinguishable from standing alone.
   // A canvas holding the scene with every placed figure drawn into it.
   //
   // The spot modal crops from this, not from the bare scene. Cropping the scene
@@ -1840,7 +1863,7 @@
       // when the write was failing.
       var label = button.textContent;
       button.dataset.busy = 'true';
-      button.textContent = 'placing you…';
+      button.textContent = 'placing you\u2026';
       button.style.pointerEvents = 'none';
       setText('[data-commit-note]', 'saving your spot');
 
@@ -1985,6 +2008,8 @@
   // the figures appear together. Revealing the scene first and populating the
   // figures a moment later showed exactly where the players were.
   //
+  // The sweep is injected by the script itself, so nothing needs adding to
+  // Webflow's code slots.
   // The sweep is defined here rather than in Webflow's code slots. Keyframes
   // cannot go in a Webflow style, and the page's own code slots belong to
   // Magnaem — so the script brings its own stylesheet, once.
