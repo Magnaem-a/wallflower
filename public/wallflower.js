@@ -292,80 +292,35 @@
     var multiplier = typeof blend.size === 'number' ? blend.size : 1;
     figure.style.height = crowdHeight * multiplier + '%';
 
-    // Lean was dropped. Rotating tipped the footprint and read as falling over;
-    // skewing sheared the artwork. Neither looked like a person standing at an
-    // angle, and a flat cut-out cannot really be leant without redrawing it.
+    // No rotation. Rotating tipped the footprint and read as falling over, and
+    // nothing in these flat illustrations sits off-vertical.
     figure.style.transform = blend.mirror ? 'scaleX(-1)' : '';
 
-    if (blend.cutOff) image.style.clipPath = 'inset(0 0 ' + blend.cutOff + '% 0)';
-    else image.style.clipPath = '';
+    // Occlusion — being physically behind something, trimmed from any edge.
+    // Capped per slider so a figure can be partly hidden but never erased.
+    var top = blend.cutTop || 0;
+    var bottom = blend.cutOff || 0;
+    var side = blend.cutSide || 0;
+    var left = side > 0 ? side : 0;
+    var right = side < 0 ? -side : 0;
 
-    // Tint pulls the figure toward whatever colour was sampled behind her.
-    // `color` blend mode alone replaces hue and saturation outright, which
-    // turns her flatly into that hue rather than making her belong — so it is
-    // paired with desaturation and capped below full. Losing vividness is most
-    // of what "blending in" is: an over-saturated figure reads as pasted on
-    // even at exactly the right hue.
-    // Without a sampled colour there is nothing true to blend toward, so tint
-    // and shade switch off entirely instead of falling back to grey.
-    var haveSample = !!blend.tint;
-    var strength = haveSample ? blend.strength || 0 : 0;
-    image.style.filter = strength ? 'saturate(' + (1 - strength * 0.55) + ')' : '';
+    image.style.clipPath =
+      top || bottom || side
+        ? 'inset(' + top + '% ' + right + '% ' + bottom + '% ' + left + '%)'
+        : '';
 
-    var src = image.getAttribute('src');
-    var mask = src ? 'url("' + src + '")' : '';
-
-    function maskTo(node) {
-      if (!node || !mask) return;
-      node.style.webkitMaskImage = mask;
-      node.style.maskImage = mask;
-      node.style.webkitMaskSize = 'contain';
-      node.style.maskSize = 'contain';
-      node.style.webkitMaskPosition = 'center';
-      node.style.maskPosition = 'center';
-      node.style.webkitMaskRepeat = 'no-repeat';
-      node.style.maskRepeat = 'no-repeat';
-    }
+    // No filters and no overlays. Colour blending was cut: a flat wash over a
+    // cut-out never read as belonging, and the overlay layers were what let the
+    // scene show through the figure.
+    image.style.filter = '';
+    image.style.mixBlendMode = 'normal';
+    image.style.opacity = 1;
 
     var tint = one('[data-figure-tint]', figure);
-    if (tint) {
-      maskTo(tint);
-      tint.style.mixBlendMode = 'color';
-      tint.style.backgroundColor = blend.tint || 'transparent';
-      tint.style.opacity = strength * 0.7;
-    }
+    if (tint) tint.style.opacity = 0;
 
-    // Shade uses the sampled colour rather than black, because a surface in
-    // shadow takes on the colour of whatever is shading it. Darkening multiplies
-    // by the patch currently behind the figure, so it moves toward that colour
-    // instead of toward black; lightening screens with it, for a figure standing
-    // in the light rather than under it.
-    //
-    // Whatever colour that is comes entirely from the sample and changes as she
-    // is dragged — nothing here is fixed to a particular scene.
-    var amount = haveSample ? blend.shade || 0 : 0;
     var shade = one('[data-figure-shade]', figure);
-
-    if (shade && !amount) shade.style.opacity = 0;
-
-    if (shade && amount) {
-      maskTo(shade);
-
-      // A wash toward the ambient colour, not a multiply.
-      //
-      // multiply is a light operation: it darkens by removing light, so it always
-      // trends toward black and the ambient hue barely survives — which is why
-      // shading read as a brightness slider. A normal-mode wash lerps the figure
-      // toward the surrounding colour instead, so a figure in a warm alcove goes
-      // warm and one in cold light goes cold. The light level still moves,
-      // because the wash colour is the ambient darkened or lifted.
-      shade.style.backgroundColor = shadeColour(hexToRgb(blend.tint), amount);
-      shade.style.mixBlendMode = 'normal';
-
-      // Capped below full so the figure never washes out to a flat silhouette —
-      // some of its own detail has to survive or it stops reading as a person.
-      shade.style.opacity = Math.min(Math.abs(amount), 1) * 0.8;
-    }
+    if (shade) shade.style.opacity = 0;
   }
 
   // -------------------------------------------------------------------------
@@ -670,11 +625,11 @@
   var blend = {
     facing: 'front',
     cutOff: 0,
+    cutTop: 0,
+    cutSide: 0,
     size: 1,
     mirror: false,
-    tint: null,
-    strength: 0,
-    shade: 0,
+    tint: null, // sampled ambient, used by the match meter only
   };
 
   var position = { x: 50, y: 60 };
@@ -902,93 +857,13 @@
   // Note the two luma formulas differ and are not interchangeable: the saturate
   // filter uses Rec.709 coefficients, the blend spec's Lum() uses its own.
 
-  function blendLum(c) {
-    return 0.3 * c[0] + 0.59 * c[1] + 0.11 * c[2];
-  }
 
-  function clipColor(c) {
-    var l = blendLum(c);
-    var lo = Math.min(c[0], c[1], c[2]);
-    var hi = Math.max(c[0], c[1], c[2]);
 
-    if (lo < 0) {
-      c = c.map(function (v) {
-        return l + ((v - l) * l) / (l - lo);
-      });
-    }
 
-    if (hi > 255) {
-      c = c.map(function (v) {
-        return l + ((v - l) * (255 - l)) / (hi - l);
-      });
-    }
 
-    return c;
-  }
 
-  function setLum(c, l) {
-    var d = l - blendLum(c);
-    return clipColor([c[0] + d, c[1] + d, c[2] + d]);
-  }
 
-  // color(backdrop, source) = SetLum(source, Lum(backdrop))
-  function blendColorMode(backdrop, source) {
-    return setLum(source.slice(), blendLum(backdrop));
-  }
 
-  // The colour the shade layer washes toward: the ambient, darkened for shadow
-  // or lifted for light. Shared by the renderer and the meter so the two cannot
-  // describe different things.
-  function shadeToward(tint, amount) {
-    var base = tint; // callers only reach this with a real sampled colour
-
-    return amount >= 0
-      ? base.map(function (c) {
-          return c * 0.45;
-        })
-      : base.map(function (c) {
-          return c + (255 - c) * 0.55;
-        });
-  }
-
-  function shadeColour(tint, amount) {
-    return (
-      'rgb(' +
-      shadeToward(tint, amount)
-        .map(function (c) {
-          return Math.round(c);
-        })
-        .join(',') +
-      ')'
-    );
-  }
-
-  function mix(a, b, t) {
-    return a.map(function (c, i) {
-      return c + (b[i] - c) * t;
-    });
-  }
-
-  function effectiveTone(avg, tint, strength, shade) {
-    // 1. saturate() — Rec.709 luma, lerping each channel toward it
-    var luma = 0.213 * avg[0] + 0.715 * avg[1] + 0.072 * avg[2];
-    var keep = 1 - strength * 0.55;
-
-    var out = avg.map(function (c) {
-      return luma + (c - luma) * keep;
-    });
-
-    // 2. tint layer: color blend, then composited at the layer's opacity
-    if (tint) {
-      out = mix(out, blendColorMode(out, tint), strength * 0.7);
-    }
-
-    if (!shade) return out;
-
-    // 3. shade layer: a normal-mode wash toward the ambient, so plain alpha
-    //    compositing — a straight lerp, matching what the renderer now does.
-    return mix(out, shadeToward(tint, shade), Math.min(Math.abs(shade), 1) * 0.8);
-  }
 
   // How hidden the figure actually is, from things that genuinely affect being
   // spotted:
@@ -1013,22 +888,24 @@
 
     var closeness;
     if (tone) {
-      var rendered = effectiveTone(
-        tone,
-        hexToRgb(blend.tint),
-        blend.strength || 0,
-        blend.shade || 0
-      );
       var distance =
-        Math.abs(rendered[0] - patch.mean[0]) +
-        Math.abs(rendered[1] - patch.mean[1]) +
-        Math.abs(rendered[2] - patch.mean[2]);
+        Math.abs(tone[0] - patch.mean[0]) +
+        Math.abs(tone[1] - patch.mean[1]) +
+        Math.abs(tone[2] - patch.mean[2]);
       closeness = 1 - Math.min(distance / 400, 1);
     } else {
       // Without the avatar's own tone there is nothing honest to compare, so
-      // cover carries the score alone rather than inventing a colour term.
+      // cover carries the score rather than inventing a colour term.
       closeness = busy;
     }
+
+    // Occlusion — being physically behind something. The strongest hiding move
+    // available, so it carries as much weight as cover. Each cut is measured
+    // against its own slider maximum.
+    var occluded = Math.min(
+      (blend.cutOff || 0) / 25 + (blend.cutTop || 0) / 45 + Math.abs(blend.cutSide || 0) / 30,
+      1
+    );
 
     var facing = blend.facing === 'back' ? 1 : 0.75;
 
@@ -1037,7 +914,10 @@
     var scale = 1 - offScale * 0.5;
 
     return Math.round(
-      Math.max(0, Math.min((closeness * 0.55 + busy * 0.45) * facing * scale, 1)) * 100
+      Math.max(
+        0,
+        Math.min((occluded * 0.35 + busy * 0.35 + closeness * 0.3) * facing * scale, 1)
+      ) * 100
     );
   }
 
@@ -1064,8 +944,7 @@
     if (image) applyBlend(node, image, blend);
 
     // Sample behind the figure's middle, not at position.x/y — those are the
-    // top-left corner, which reads the background above her head. That is why
-    // the swatch showed pale sky while she stood on a green hedge.
+    // top-left corner, which reads the background above her head.
     var sx = position.x;
     var sy = position.y;
     var scrollerBox = one('[data-scroller]');
@@ -1079,42 +958,26 @@
     }
 
     var patch = samplePatch(sx, sy);
-    var score = scoreMatch(patch);
+    if (patch) blend.tint = patch.hex;
 
+    var score = scoreMatch(patch);
     setText('[data-meter-value]', score + '%');
     var meter = one('[data-meter-fill]');
     if (meter) meter.style.width = score + '%';
 
-    if (patch) {
-      var swatch = one('[data-sampled-colour]');
-      if (swatch) swatch.style.backgroundColor = patch.hex;
-
-      // Always track the live sample. This used to assign only when tint was
-      // unset, on the reasoning that a member might override it — but there is
-      // no colour picker, so nothing ever did. The result was that the swatch
-      // followed the drag while the tint and shade layers stayed frozen at
-      // whatever colour was under the figure when it first appeared.
-      //
-      // Committed figures are unaffected: renderFigures reads tint from their
-      // stored blend, which is correctly frozen at their own commit position.
-      blend.tint = patch.hex;
-    }
-
     setText('[data-value-cutoff]', Math.round(blend.cutOff) + '%');
+    setText('[data-value-cuttop]', Math.round(blend.cutTop) + '%');
+    setText('[data-value-cutside]', Math.round(Math.abs(blend.cutSide)) + '%');
     setText('[data-value-size]', blend.size.toFixed(2));
-    setText('[data-value-strength]', Math.round(blend.strength * 100) + '%');
-    setText('[data-value-shade]', Math.round(blend.shade * 100) + '%');
 
-    fillTrack('[data-track-cutoff]', blend.cutOff / 100);
+    fillTrack('[data-track-cutoff]', blend.cutOff / 25);
+    fillTrack('[data-track-cuttop]', blend.cutTop / 45);
+    fillTrack('[data-track-cutside]', (blend.cutSide + 30) / 60);
     fillTrack('[data-track-size]', (blend.size - 0.3) / 2.7);
-    fillTrack('[data-track-strength]', blend.strength);
-    fillTrack('[data-track-shade]', (blend.shade + 0.7) / 1.4);
 
     all('[data-facing-option]').forEach(function (option) {
-      // is-facing, not is-selected. Both existed as global classes with the same
-      // name and different intents, so whichever was written last silently
-      // redefined the other — it turned the avatar picker's selected tile into a
-      // filled brown box.
+      // is-facing, not is-selected — two globals of the same name with different
+      // intents meant the later one silently redefined the earlier.
       option.classList.toggle('is-facing', option.dataset.facingOption === blend.facing);
     });
 
@@ -1177,16 +1040,20 @@
 
   function wireControls() {
     dragTrack('[data-track-cutoff]', function (r) {
-      blend.cutOff = r * 100;
+      blend.cutOff = r * 25;
     });
+    dragTrack('[data-track-cuttop]', function (r) {
+      blend.cutTop = r * 45;
+    });
+
+    // Signed: left of centre clips the left edge, right clips the right, so one
+    // slider covers being behind a pillar on either side.
+    dragTrack('[data-track-cutside]', function (r) {
+      blend.cutSide = -30 + r * 60;
+    });
+
     dragTrack('[data-track-size]', function (r) {
       blend.size = 0.3 + r * 2.7;
-    });
-    dragTrack('[data-track-strength]', function (r) {
-      blend.strength = r;
-    });
-    dragTrack('[data-track-shade]', function (r) {
-      blend.shade = -0.7 + r * 1.4;
     });
 
     all('[data-facing-option]').forEach(function (option) {
