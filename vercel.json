@@ -2,7 +2,7 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "headers": [
     {
-      "source": "/wallflower.js",
+      "source": "/(.*).js",
       "headers": [
         {
           "key": "Content-Type",
