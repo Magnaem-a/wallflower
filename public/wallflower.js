@@ -40,6 +40,9 @@
   var selectedScene = null;
   var statusTimer = null;
 
+  // Shared with the spot modal so it can refuse a call before it is made.
+  var callsState = { left: SPOTS_PER_HOUR, cooling: false, mins: 0 };
+
   // -------------------------------------------------------------------------
   // DOM helpers
   //
@@ -422,7 +425,13 @@
     var pill = one('[data-calls-left]');
     if (pill) pill.dataset.exhausted = left === 0 || cooling ? 'true' : 'false';
 
-    return { left: left, cooling: cooling };
+    callsState = {
+      left: left,
+      cooling: !!cooling,
+      mins: cooling ? Math.ceil((MISS_COOLDOWN_MS - (Date.now() - lastMiss)) / 60000) : 0,
+    };
+
+    return callsState;
   }
 
   // The member's own crop comes from their `cropped-avatar-url` custom field,
@@ -608,14 +617,153 @@
         }
       });
 
-      if (typeof window.openSpotModal === 'function') {
-        window.openSpotModal({
-          x: ((event.clientX - box.left) / box.width) * 100,
-          y: ((event.clientY - box.top) / box.height) * 100,
-          hideId: hit,
-        });
-      }
+      openSpotModal({
+        x: ((event.clientX - box.left) / box.width) * 100,
+        y: ((event.clientY - box.top) / box.height) * 100,
+        hideId: hit,
+      });
     });
+
+    var cancel = one('[data-spot-cancel]');
+    if (cancel) {
+      cancel.addEventListener('click', function (event) {
+        event.preventDefault();
+        closeSpotModal();
+      });
+    }
+
+    var dim = one('[data-spot-dim]');
+    if (dim) dim.addEventListener('click', closeSpotModal);
+
+    var confirmButton = one('[data-spot-confirm]');
+    if (confirmButton) confirmButton.addEventListener('click', submitSpot);
+  }
+
+  // What was clicked, held between opening the modal and confirming it.
+  var pendingSpot = null;
+
+  function closeSpotModal() {
+    pendingSpot = null;
+    var dim = one('[data-spot-dim]');
+    var modal = one('[data-spot-modal]');
+    if (dim) dim.style.display = 'none';
+    if (modal) modal.style.display = 'none';
+  }
+
+  // Opens for every click, including one that hit nothing. Offering it only over
+  // real players would show exactly where they are.
+  function openSpotModal(target) {
+    var modal = one('[data-spot-modal]');
+    var dim = one('[data-spot-dim]');
+    if (!modal || !dim) return;
+
+    // Out of calls, or still cooling off. Said here rather than after committing,
+    // so nobody spends a call they do not have and is refused afterwards.
+    var canCall = !callsState.cooling && callsState.left > 0;
+
+    if (callsState.cooling) {
+      setText('[data-spot-title]', 'Still cooling off');
+      setText('[data-spot-note]', 'A wrong call locks you out for ten minutes. Wait it out.');
+    } else if (!canCall) {
+      setText('[data-spot-title]', 'No calls left this hour');
+      setText('[data-spot-note]', 'You get three an hour. The next comes back within the hour.');
+    } else {
+      setText('[data-spot-title]', 'Call this one out?');
+      setText(
+        '[data-spot-note]',
+        'Most figures here are painted, not players. A wrong call spends one of your three and ' +
+          'locks you out of calling for ten minutes.'
+      );
+    }
+
+    var confirmButton = one('[data-spot-confirm]');
+    if (confirmButton) confirmButton.style.display = canCall ? '' : 'none';
+
+    pendingSpot = canCall ? target : null;
+
+    // A zoomed crop of exactly where the click landed, so the decision is about
+    // the figure that was picked rather than the whole scene.
+    var crop = one('[data-spot-crop]');
+    var sceneImg = one('[data-scene-img]');
+    if (crop && sceneImg) {
+      var url = imageUrl(sceneImg);
+      if (url) {
+        crop.style.backgroundImage = 'url("' + url + '")';
+        crop.style.backgroundSize = '900%';
+        crop.style.backgroundPosition = target.x + '% ' + target.y + '%';
+      }
+    }
+
+    setText(
+      '[data-spot-where]',
+      Math.round(target.x) + '% across, ' + Math.round(target.y) + '% down'
+    );
+    paintPips();
+
+    dim.style.display = 'block';
+    modal.style.display = 'flex';
+  }
+
+  function paintPips() {
+    all('[data-spot-pip]').forEach(function (pip, index) {
+      pip.classList.toggle('is-spent', index >= callsState.left);
+    });
+
+    if (callsState.cooling) {
+      setText('[data-spot-calls]', 'locked out for ' + callsState.mins + ' more minutes');
+    } else {
+      setText(
+        '[data-spot-calls]',
+        callsState.left + (callsState.left === 1 ? ' call' : ' calls') + ' left this hour'
+      );
+    }
+  }
+
+  // Writes the spot. The result is decided here, not by the player: hit if the
+  // click landed on a live hide, miss otherwise. createdAt and the member id are
+  // server side, so neither the outcome nor the cooldown can be forged.
+  async function submitSpot(event) {
+    event.preventDefault();
+
+    var api = ms();
+    if (!api || !pendingSpot) return;
+
+    var target = pendingSpot;
+    pendingSpot = null;
+
+    var confirmButton = one('[data-spot-confirm]');
+    if (confirmButton) confirmButton.style.pointerEvents = 'none';
+    setText('[data-spot-calls]', 'calling it\u2026');
+
+    try {
+      var member = await api.getCurrentMember();
+      var data = member && member.data;
+      if (!data) throw new Error('not logged in');
+
+      var payload = {
+        scene_id: sceneSlug,
+        x: Number(target.x.toFixed(4)),
+        y: Number(target.y.toFixed(4)),
+        result: target.hideId ? 'hit' : 'miss',
+        username: (data.customFields || {})['user-name'] || 'someone',
+        memberId: data.id,
+      };
+
+      // The reference is what ends a hide — a hide counts as live until a spot
+      // points at it.
+      if (target.hideId) payload.hide = target.hideId;
+
+      var created = await api.createDataRecord({ table: 'spots', data: payload });
+      if (!created || !created.data || !created.data.id) {
+        throw new Error('write returned no record id');
+      }
+
+      window.location.reload();
+    } catch (err) {
+      setText('[data-spot-calls]', 'could not call it: ' + (err.message || err));
+      console.error('Wallflower: spot not created', err);
+      if (confirmButton) confirmButton.style.pointerEvents = '';
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -988,6 +1136,77 @@
     return 0.25 + 0.75 * (total / strips.length);
   }
 
+  // Crowd proximity, by counting skin-tone pixels around the figure.
+  //
+  // Variance could not tell a group of people from a stack of crates — both read
+  // as busy — and for these avatars those are opposites: the art does not match
+  // the painted crowd, so standing among people highlights the mismatch.
+  //
+  // These scenes are flat vector with a tight palette, so skin sits in a narrow,
+  // recognisable range while wood, stone and foliage sit well outside it.
+  // Counting it is enough to answer "am I standing in a group", which no amount
+  // of contrast maths could.
+  //
+  // Known limits: very warm wood tones can read as skin, and it cannot tell a
+  // painted person from a painted portrait. Both would show up as a spot scoring
+  // crowded when it plainly is not.
+  function isSkinTone(r, g, b) {
+    if (r < 80 || r > 255) return false;
+    if (r <= g || g <= b) return false; // skin runs warm: red > green > blue
+
+    var spread = r - b;
+    if (spread < 15 || spread > 130) return false;
+
+    var max = Math.max(r, g, b);
+    var min = Math.min(r, g, b);
+    if (max - min < 12) return false; // near-grey is not skin
+
+    return true;
+  }
+
+  // 0 = nobody nearby, 1 = standing in a group. Sampled from a band around the
+  // figure rather than behind it — who is beside you is what gives you away.
+  function crowdNearby(box) {
+    if (!sceneBitmap || !box) return 0;
+
+    var W = sceneBitmap.width;
+    var H = sceneBitmap.height;
+    var pad = box.w * 1.6; // roughly a figure's width of neighbourhood each side
+
+    var x = Math.max(0, Math.round(((box.x - pad) / 100) * W));
+    var y = Math.max(0, Math.round((box.y / 100) * H));
+    var w = Math.min(Math.round(((box.w + pad * 2) / 100) * W), W - x);
+    var h = Math.min(Math.round((box.h / 100) * H), H - y);
+
+    if (w < 4 || h < 4) return 0;
+
+    var data;
+    try {
+      data = sceneBitmap
+        .getContext('2d', { willReadFrequently: true })
+        .getImageData(x, y, w, h).data;
+    } catch (err) {
+      return 0;
+    }
+
+    var skin = 0;
+    var seen = 0;
+
+    // Stepped: proportion does not need every pixel.
+    for (var i = 0; i < data.length; i += 16) {
+      if (data[i + 3] < 128) continue;
+      seen++;
+      if (isSkinTone(data[i], data[i + 1], data[i + 2])) skin++;
+    }
+
+    if (!seen) return 0;
+
+    // A lone figure's own face and hands are a few percent of the band, so the
+    // floor is set above that. Around 12% is a real group.
+    var ratio = skin / seen;
+    return Math.min(Math.max((ratio - 0.03) / 0.09, 0), 1);
+  }
+
   // How hidden the figure looks, from the two things a member actually controls
   // here: what is in front of them, and what is behind them.
   //
@@ -1033,8 +1252,13 @@
     var offScale = Math.min(Math.abs((blend.size || 1) - 1) / 1.2, 1);
     var scale = 1 - offScale * 0.5;
 
+    // Standing in a group costs up to 40%. Not fatal — a crowd is still cover of
+    // a sort — but it should never be the best spot on the board.
+    var exposure = 1 - crowdNearby(box) * 0.4;
+
     return Math.round(
-      Math.max(0, Math.min((occluded * 0.55 + closeness * 0.45) * facing * scale, 1)) * 100
+      Math.max(0, Math.min((occluded * 0.55 + closeness * 0.45) * facing * scale * exposure, 1)) *
+        100
     );
   }
 
@@ -1267,7 +1491,7 @@
       // when the write was failing.
       var label = button.textContent;
       button.dataset.busy = 'true';
-      button.textContent = 'placing you…';
+      button.textContent = 'placing you\u2026';
       button.style.pointerEvents = 'none';
       setText('[data-commit-note]', 'saving your spot');
 
