@@ -199,10 +199,14 @@
     logRowShape(hides[0]);
 
     var endedAt = {};
+    var endedBy = {};
+
     hits.forEach(function (spot) {
       var ref = spot.data && spot.data.hide;
       var id = ref && (ref.id || ref);
-      if (id) endedAt[id] = spot.createdAt;
+      if (!id) return;
+      endedAt[id] = spot.createdAt;
+      endedBy[id] = spot.data && spot.data.username;
     });
 
     var now = Date.now();
@@ -226,6 +230,8 @@
           blend: parseBlendJson(data.blend),
           durationMs: end - start,
           stillHidden: !endedAt[hide.id],
+          endedAt: endedAt[hide.id] || null,
+          foundBy: endedBy[hide.id] || null,
         };
       })
       .sort(function (a, b) {
@@ -645,6 +651,52 @@
     if (confirmButton) confirmButton.addEventListener('click', submitSpot);
   }
 
+  // Cuts a small square out of the composite around the click.
+  //
+  // Cropping the whole composite via background-position meant a full-size
+  // toDataURL on every open — a large string built each time, and one that
+  // throws outright if anything drawn into the canvas tainted it. Drawing just
+  // the region needed is cheaper and the failure is contained.
+  var CROP_SOURCE = 165; // scene pixels shown, matching Paper's 900% zoom
+
+  function paintCrop(crop, target) {
+    var source = compositeBitmap || sceneBitmap;
+
+    if (!source) {
+      // No readable pixels at all. Better an empty crop than a broken modal.
+      crop.style.backgroundImage = '';
+      return;
+    }
+
+    var half = CROP_SOURCE / 2;
+    var cx = (target.x / 100) * source.width;
+    var cy = (target.y / 100) * source.height;
+
+    var sx = Math.max(0, Math.min(cx - half, source.width - CROP_SOURCE));
+    var sy = Math.max(0, Math.min(cy - half, source.height - CROP_SOURCE));
+
+    try {
+      var out = document.createElement('canvas');
+      out.width = CROP_SOURCE;
+      out.height = CROP_SOURCE;
+      out
+        .getContext('2d')
+        .drawImage(source, sx, sy, CROP_SOURCE, CROP_SOURCE, 0, 0, CROP_SOURCE, CROP_SOURCE);
+
+      crop.style.backgroundImage = 'url("' + out.toDataURL() + '")';
+      crop.style.backgroundSize = 'cover';
+      crop.style.backgroundPosition = '50% 50%';
+    } catch (err) {
+      // A tainted canvas throws here rather than at draw time. Say so once, and
+      // leave the crop empty rather than letting it take the modal down.
+      if (!paintCrop.warned) {
+        paintCrop.warned = true;
+        console.error('Wallflower: crop unavailable (canvas tainted) —', err.message);
+      }
+      crop.style.backgroundImage = '';
+    }
+  }
+
   // What was clicked, held between opening the modal and confirming it.
   var pendingSpot = null;
   var lastRanked = [];
@@ -693,22 +745,7 @@
     var crop = one('[data-spot-crop]');
     if (crop) {
       crop.classList.remove('is-hit', 'is-miss');
-
-      // From the composite, so a player and a painted figure crop identically.
-      var source = compositeBitmap;
-      if (source) {
-        crop.style.backgroundImage = 'url("' + source.toDataURL() + '")';
-        crop.style.backgroundSize = '900%';
-        crop.style.backgroundPosition = target.x + '% ' + target.y + '%';
-      } else {
-        var sceneImg = one('[data-scene-img]');
-        var url = sceneImg ? imageUrl(sceneImg) : null;
-        if (url) {
-          crop.style.backgroundImage = 'url("' + url + '")';
-          crop.style.backgroundSize = '900%';
-          crop.style.backgroundPosition = target.x + '% ' + target.y + '%';
-        }
-      }
+      paintCrop(crop, target);
     }
 
     setText(
@@ -859,6 +896,139 @@
       setText('[data-spot-calls]', 'could not call it: ' + (err.message || err));
       console.error('Wallflower: spot not created', err);
       if (confirmButton) confirmButton.style.pointerEvents = '';
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Being found
+  //
+  // The other half of artboard 06. A seeker gets an outcome the moment they
+  // call it; the person found gets nothing until they come back, and the end of
+  // a hide is the moment the whole game is about.
+  //
+  // Which hide has been seen is kept in member JSON, so dismissing survives a
+  // reload without needing a field on the table.
+  // -------------------------------------------------------------------------
+
+  function timeAgo(ms) {
+    var mins = Math.floor(ms / 60000);
+    if (mins < 2) return 'just now';
+    if (mins < 60) return mins + ' minutes ago';
+
+    var hours = Math.round(mins / 60);
+    if (hours < 24) return hours === 1 ? 'about an hour ago' : hours + ' hours ago';
+
+    var days = Math.round(hours / 24);
+    return days === 1 ? 'yesterday' : days + ' days ago';
+  }
+
+  async function checkFound(api, memberId, ranked, json) {
+    // The most recent hide of yours that a spot ended.
+    var ended = ranked
+      .filter(function (entry) {
+        return entry.memberId === memberId && !entry.stillHidden;
+      })
+      .sort(function (a, b) {
+        return new Date(b.createdAt) - new Date(a.createdAt);
+      })[0];
+
+    if (!ended || json.seenFound === ended.hideId) return;
+
+    var badge = one('[data-spotted-badge]');
+    if (badge) {
+      badge.style.display = 'flex';
+      badge.addEventListener('click', function () {
+        openFound(ended, ranked, api, json);
+      });
+    }
+
+    openFound(ended, ranked, api, json);
+  }
+
+  function openFound(ended, ranked, api, json) {
+    var modal = one('[data-found-modal]');
+    var dim = one('[data-spot-dim]');
+    if (!modal || !dim) return;
+
+    // Who called it. The spot carries the seeker's username, denormalised for
+    // exactly this — one member cannot read another's profile.
+    var seeker = ended.foundBy || 'someone';
+
+    setText('[data-found-title]', seeker + ' found you');
+    setText(
+      '[data-found-where]',
+      'in the ' +
+        String(ended.sceneId).replace(/-/g, ' ') +
+        ', ' +
+        timeAgo(Date.now() - new Date(ended.endedAt || ended.createdAt).getTime())
+    );
+    setText('[data-found-time]', formatDuration(ended.durationMs));
+
+    // Where that run landed, rather than a bare number.
+    var place =
+      ranked
+        .slice()
+        .sort(function (a, b) {
+          return b.durationMs - a.durationMs;
+        })
+        .indexOf(ended) + 1;
+
+    setText(
+      '[data-found-note]',
+      place && place <= 8
+        ? 'Long enough for ' + place + ordinal(place) + ' place. Your time is locked in on the board.'
+        : 'Your time is locked in on the board.'
+    );
+
+    var crop = one('[data-found-crop]');
+    var art = avatars[ended.foundByAvatar];
+    if (crop && art && art.crop) crop.style.backgroundImage = 'url("' + art.crop + '")';
+
+    dim.style.display = 'block';
+    modal.style.display = 'flex';
+
+    function dismiss(goHide) {
+      dim.style.display = 'none';
+      modal.style.display = 'none';
+
+      // Marked as seen so it does not reopen on every visit. The badge stays
+      // lit until a new hide is placed.
+      saveSeen(api, json, ended.hideId);
+      if (goHide) window.location.reload();
+    }
+
+    var again = one('[data-found-again]');
+    if (again) {
+      again.addEventListener('click', function (event) {
+        event.preventDefault();
+        dismiss(true);
+      });
+    }
+
+    var later = one('[data-found-dismiss]');
+    if (later) {
+      later.addEventListener('click', function (event) {
+        event.preventDefault();
+        dismiss(false);
+      });
+    }
+  }
+
+  function ordinal(n) {
+    if (n === 1) return 'st';
+    if (n === 2) return 'nd';
+    if (n === 3) return 'rd';
+    return 'th';
+  }
+
+  async function saveSeen(api, json, hideId) {
+    try {
+      var current = await api.getMemberJSON();
+      var next = (current && current.data) || {};
+      next.seenFound = hideId;
+      await api.updateMemberJSON({ json: next });
+    } catch (err) {
+      console.error('Wallflower: could not mark the find as seen', err);
     }
   }
 
@@ -1882,6 +2052,8 @@
       paintHud(mySpots);
       paintBoard(ranked, memberId);
       renderFigures(ranked);
+
+      await checkFound(api, memberId, ranked, json);
 
       if (myHide) {
         runTimer(myHide);
