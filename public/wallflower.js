@@ -138,15 +138,21 @@
   function ownerOf(row) {
     var data = row.data || {};
 
-    // The client-side query does not return ownership at all — only six keys,
-    // none of them the creator. So the member id is denormalised onto the row at
-    // commit time, inside the blend JSON, which is already a TEXT field holding
-    // an object. Same reason username is denormalised: what the admin API knows
-    // about a record is not what the browser gets to see.
-    var fromBlend = parseBlendJson(data.blend).memberId;
+    // Both tables now carry an explicit MEMBER_REFERENCE field. The creator is
+    // tracked server-side too, but queryDataRecords does not return it to the
+    // browser — so ownership had to be denormalised. A real member reference is
+    // the right way to do that, rather than smuggling an id through a text field.
+    var ref = data.member;
+    var fromRef = ref && (ref.id || ref.memberId || (typeof ref === 'string' ? ref : null));
 
     return (
-      row.createdByMemberId || row.memberId || row.createdBy || data.member_id || fromBlend || null
+      fromRef ||
+      row.createdByMemberId ||
+      row.memberId ||
+      row.createdBy ||
+      data.member_id ||
+      data.memberId ||
+      null
     );
   }
 
@@ -641,6 +647,7 @@
 
   // What was clicked, held between opening the modal and confirming it.
   var pendingSpot = null;
+  var lastRanked = [];
 
   function closeSpotModal() {
     pendingSpot = null;
@@ -719,6 +726,85 @@
     }
   }
 
+  // The outcome, shown in the same modal rather than a second one. Reloading
+  // straight after the write made a hit and a miss look identical — the page
+  // simply refreshed — which gave a player no acknowledgement either way.
+  //
+  // A miss gets as much care as a hit. It costs a call and ten minutes, so it
+  // has to read as a fair result of a reasonable guess, not a telling-off: the
+  // scene is mostly painted people, and mistaking one is the expected case.
+  function showOutcome(hideId) {
+    var found = lastRanked.filter(function (entry) {
+      return entry.hideId === hideId;
+    })[0];
+
+    var crop = one('[data-spot-crop]');
+    var confirmButton = one('[data-spot-confirm]');
+    var cancelText = one('[data-spot-cancel] div');
+
+    if (confirmButton) confirmButton.style.display = 'none';
+    if (cancelText) cancelText.textContent = 'Back to the scene';
+
+    if (found) {
+      // Show who it was, not the patch of scene — the reward for a hit is
+      // finding out who you caught.
+      var art = avatars[found.avatarId];
+      if (crop) {
+        crop.classList.remove('is-miss');
+        crop.classList.add('is-hit');
+        if (art && art.crop) {
+          crop.style.backgroundImage = 'url("' + art.crop + '")';
+          crop.style.backgroundSize = 'cover';
+          crop.style.backgroundPosition = '50% 50%';
+        }
+      }
+
+      setText('[data-spot-title]', 'Found them');
+      setText('[data-spot-where]', found.username || 'someone');
+      setText(
+        '[data-spot-note]',
+        (found.username || 'They') +
+          ' had been hidden for ' +
+          formatDuration(found.durationMs) +
+          '. That hide is over, and their time is locked in on the board.'
+      );
+      setText('[data-spot-calls]', 'your calls are untouched');
+      all('[data-spot-pip]').forEach(function (pip) {
+        pip.classList.remove('is-spent');
+      });
+    } else {
+      if (crop) {
+        crop.classList.remove('is-hit');
+        crop.classList.add('is-miss');
+      }
+
+      setText('[data-spot-title]', 'Painted, not a player');
+      setText('[data-spot-where]', 'part of the scene');
+      setText(
+        '[data-spot-note]',
+        'That one was always part of the picture. Most of them are — nobody gets ' +
+          'this right often. You can call again in ten minutes.'
+      );
+
+      var left = Math.max(0, callsState.left - 1);
+      setText('[data-spot-calls]', 'locked out for ten minutes');
+      all('[data-spot-pip]').forEach(function (pip, index) {
+        pip.classList.toggle('is-spent', index >= left);
+      });
+    }
+
+    // Dismissing reloads, so the board, the counts and the cooldown all come
+    // back from the record rather than being patched in place.
+    var cancel = one('[data-spot-cancel]');
+    var dim = one('[data-spot-dim]');
+    if (cancel) cancel.addEventListener('click', reload);
+    if (dim) dim.addEventListener('click', reload);
+  }
+
+  function reload() {
+    window.location.reload();
+  }
+
   // Writes the spot. The result is decided here, not by the player: hit if the
   // click landed on a live hide, miss otherwise. createdAt and the member id are
   // server side, so neither the outcome nor the cooldown can be forged.
@@ -746,7 +832,7 @@
         y: Number(target.y.toFixed(4)),
         result: target.hideId ? 'hit' : 'miss',
         username: (data.customFields || {})['user-name'] || 'someone',
-        memberId: data.id,
+        member: data.id,
       };
 
       // The reference is what ends a hide — a hide counts as live until a spot
@@ -758,7 +844,7 @@
         throw new Error('write returned no record id');
       }
 
-      window.location.reload();
+      showOutcome(target.hideId);
     } catch (err) {
       setText('[data-spot-calls]', 'could not call it: ' + (err.message || err));
       console.error('Wallflower: spot not created', err);
@@ -1506,22 +1592,15 @@
           return;
         }
 
-        // memberId travels inside the blend so the row can be recognised as
-        // yours on read. applyBlend ignores the extra key.
-        var owned = {};
-        Object.keys(blend).forEach(function (k) {
-          owned[k] = blend[k];
-        });
-        owned.memberId = data.id;
-
         var payload = {
           avatar_id: avatarSlug || '',
           scene_id: sceneSlug,
           x: Number(position.x.toFixed(4)),
           y: Number(position.y.toFixed(4)),
           facing: blend.facing,
-          blend: JSON.stringify(owned),
+          blend: JSON.stringify(blend),
           username: (data.customFields || {})['user-name'] || 'someone',
+          member: data.id,
         };
 
         console.log('Wallflower: creating hide', payload);
@@ -1654,6 +1733,7 @@
       paintFace(fields['cropped-avatar-url'], json.avatar);
 
       var ranked = await loadHides();
+      lastRanked = ranked;
       console.log('Wallflower: hides read', ranked.length);
 
       sceneCounts = {};
