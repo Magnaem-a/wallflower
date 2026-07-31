@@ -1111,7 +1111,11 @@
     fillTrack('[data-track-shade]', (blend.shade + 0.7) / 1.4);
 
     all('[data-facing-option]').forEach(function (option) {
-      option.classList.toggle('is-selected', option.dataset.facingOption === blend.facing);
+      // is-facing, not is-selected. Both existed as global classes with the same
+      // name and different intents, so whichever was written last silently
+      // redefined the other — it turned the avatar picker's selected tile into a
+      // filled brown box.
+      option.classList.toggle('is-facing', option.dataset.facingOption === blend.facing);
     });
 
     var toggle = one('[data-mirror]');
