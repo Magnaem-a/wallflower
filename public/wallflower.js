@@ -866,7 +866,7 @@
 
     var confirmButton = one('[data-spot-confirm]');
     if (confirmButton) confirmButton.style.pointerEvents = 'none';
-    setText('[data-spot-calls]', 'calling it\u2026');
+    setText('[data-spot-calls]', 'calling it…');
 
     try {
       var member = await api.getCurrentMember();
@@ -1271,29 +1271,6 @@
   // Note the two luma formulas differ and are not interchangeable: the saturate
   // filter uses Rec.709 coefficients, the blend spec's Lum() uses its own.
 
-
-
-
-
-
-
-
-
-  // How hidden the figure actually is, from things that genuinely affect being
-  // spotted:
-  //   how close its rendered colour is to the patch behind it
-  //   how busy that patch is — cover
-  //   whether its face is showing
-  //   whether it is scaled anywhere near the painted crowd
-  //
-  // Deliberately not scored on how far the sliders have been pushed. Tint now
-  // always equals the sample, so comparing tint to the patch would return a
-  // perfect match every time and tell the player nothing. Rewarding slider
-  // movement would be worse — it would report "well hidden" for effort rather
-  // than for result.
-  //
-  // It still cannot score proximity to other figures: the crowd is painted into
-  // the image, so standing in a group is indistinguishable from standing alone.
   // A canvas holding the scene with every placed figure drawn into it.
   //
   // The spot modal crops from this, not from the bare scene. Cropping the scene
@@ -1849,7 +1826,7 @@
       // when the write was failing.
       var label = button.textContent;
       button.dataset.busy = 'true';
-      button.textContent = 'placing you\u2026';
+      button.textContent = 'placing you…';
       button.style.pointerEvents = 'none';
       setText('[data-commit-note]', 'saving your spot');
 
@@ -1994,10 +1971,30 @@
   // the figures appear together. Revealing the scene first and populating the
   // figures a moment later showed exactly where the players were.
   //
-  // The sweep itself is CSS, in the page head — Webflow's style tool cannot hold
-  // keyframes.
+  // The sweep is defined here rather than in Webflow's code slots. Keyframes
+  // cannot go in a Webflow style, and the page's own code slots belong to
+  // Magnaem — so the script brings its own stylesheet, once.
+  function ensureSkeletonStyle() {
+    if (document.getElementById('wallflower-skeleton')) return;
+
+    var style = document.createElement('style');
+    style.id = 'wallflower-skeleton';
+    style.textContent =
+      '.skeleton_cover{position:absolute;inset:0;z-index:20;border-radius:inherit;' +
+      'background:linear-gradient(to right,#F6EDE3 25%,#FFF9F2 50%,#F6EDE3 75%);' +
+      'background-size:200% 100%;animation:wf-skeleton 1.4s infinite linear}' +
+      '@keyframes wf-skeleton{0%{background-position:-100% 0}100%{background-position:100% 0}}';
+
+    document.head.appendChild(style);
+  }
+
   function showSkeletons() {
-    all('[data-skeleton]').forEach(function (node) {
+    var targets = all('[data-skeleton]');
+    if (!targets.length) return;
+
+    ensureSkeletonStyle();
+
+    targets.forEach(function (node) {
       var cover = document.createElement('div');
       cover.className = 'skeleton_cover';
       cover.setAttribute('data-skeleton-cover', '');
