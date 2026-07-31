@@ -1985,7 +1985,30 @@
 
   // -------------------------------------------------------------------------
 
+  // Skeletons. Anything carrying [data-skeleton] gets a pulsing cover from the
+  // moment the script runs until the data it waits for has actually painted —
+  // not a fixed timer, which lifts too early on a slow read and too late on a
+  // fast one. The board also rebuilds its children, so covers live on the
+  // containers, never inside them.
+  function showSkeletons() {
+    all('[data-skeleton]').forEach(function (node) {
+      var cover = document.createElement('div');
+      cover.className = 'skeleton_cover';
+      cover.setAttribute('data-skeleton-cover', '');
+      if (getComputedStyle(node).position === 'static') node.style.position = 'relative';
+      node.appendChild(cover);
+    });
+  }
+
+  function hideSkeletons() {
+    all('[data-skeleton-cover]').forEach(function (cover) {
+      cover.remove();
+    });
+  }
+
   async function start() {
+    showSkeletons();
+
     sceneSlug = textOf('[data-scene-slug]');
     crowdHeight = parseFloat(textOf('[data-crowd-height]')) || 12;
     readAvatarLookup();
@@ -2052,6 +2075,7 @@
       paintHud(mySpots);
       paintBoard(ranked, memberId);
       renderFigures(ranked);
+      hideSkeletons();
 
       await checkFound(api, memberId, ranked, json);
 
@@ -2074,7 +2098,9 @@
         setStatus('No spot chosen yet', 'pick a scene first');
       }
     } catch (err) {
-      // The scene still renders from the CMS. Only the live layer is missing.
+      // The scene still renders from the CMS. Only the live layer is missing —
+      // and a skeleton left up over it would read as a permanent loading state.
+      hideSkeletons();
       console.error('Wallflower: scene data unavailable', err);
     }
   }
