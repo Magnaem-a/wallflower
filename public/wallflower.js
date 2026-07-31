@@ -691,13 +691,23 @@
     // A zoomed crop of exactly where the click landed, so the decision is about
     // the figure that was picked rather than the whole scene.
     var crop = one('[data-spot-crop]');
-    var sceneImg = one('[data-scene-img]');
-    if (crop && sceneImg) {
-      var url = imageUrl(sceneImg);
-      if (url) {
-        crop.style.backgroundImage = 'url("' + url + '")';
+    if (crop) {
+      crop.classList.remove('is-hit', 'is-miss');
+
+      // From the composite, so a player and a painted figure crop identically.
+      var source = compositeBitmap;
+      if (source) {
+        crop.style.backgroundImage = 'url("' + source.toDataURL() + '")';
         crop.style.backgroundSize = '900%';
         crop.style.backgroundPosition = target.x + '% ' + target.y + '%';
+      } else {
+        var sceneImg = one('[data-scene-img]');
+        var url = sceneImg ? imageUrl(sceneImg) : null;
+        if (url) {
+          crop.style.backgroundImage = 'url("' + url + '")';
+          crop.style.backgroundSize = '900%';
+          crop.style.backgroundPosition = target.x + '% ' + target.y + '%';
+        }
       }
     }
 
@@ -1114,6 +1124,98 @@
   //
   // It still cannot score proximity to other figures: the crowd is painted into
   // the image, so standing in a group is indistinguishable from standing alone.
+  // A canvas holding the scene with every placed figure drawn into it.
+  //
+  // The spot modal crops from this, not from the bare scene. Cropping the scene
+  // meant clicking a real player produced empty ground while clicking a painted
+  // one produced a figure — which told a seeker exactly what they had found
+  // before they committed a call. The whole modal depends on both looking
+  // equally plausible.
+  var compositeBitmap = null;
+  var avatarImages = {};
+
+  function loadImage(url) {
+    if (!url) return Promise.resolve(null);
+    if (avatarImages[url] !== undefined) return Promise.resolve(avatarImages[url]);
+
+    return new Promise(function (resolve) {
+      var img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = function () {
+        avatarImages[url] = img;
+        resolve(img);
+      };
+      img.onerror = function () {
+        avatarImages[url] = null;
+        resolve(null);
+      };
+      img.src = url;
+    });
+  }
+
+  async function buildComposite(hides) {
+    if (!sceneBitmap) return null;
+
+    var W = sceneBitmap.width;
+    var H = sceneBitmap.height;
+
+    var canvas = document.createElement('canvas');
+    canvas.width = W;
+    canvas.height = H;
+
+    var ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(sceneBitmap, 0, 0);
+
+    var here = hides.filter(function (hide) {
+      return hide.sceneId === sceneSlug && hide.stillHidden;
+    });
+
+    for (var i = 0; i < here.length; i++) {
+      var hide = here[i];
+      var art = avatars[hide.avatarId];
+      if (!art) continue;
+
+      var facing = hide.blend && hide.blend.facing === 'back' ? 'back' : 'front';
+      var img = await loadImage(art[facing]);
+      if (!img || !img.naturalHeight) continue;
+
+      var size = typeof hide.blend.size === 'number' ? hide.blend.size : 1;
+      var h = (crowdHeight * size * H) / 100;
+      var w = h * (img.naturalWidth / img.naturalHeight);
+      var x = (hide.x / 100) * W;
+      var y = (hide.y / 100) * H;
+
+      // Same trims the DOM figure gets, so the composite matches what is on
+      // screen rather than an idealised version of it.
+      var top = ((hide.blend.cutTop || 0) / 100) * img.naturalHeight;
+      var bottom = ((hide.blend.cutOff || 0) / 100) * img.naturalHeight;
+      var side = hide.blend.cutSide || 0;
+      var left = side > 0 ? (side / 100) * img.naturalWidth : 0;
+      var right = side < 0 ? (-side / 100) * img.naturalWidth : 0;
+
+      var sx = left;
+      var sy = top;
+      var sw = Math.max(1, img.naturalWidth - left - right);
+      var sh = Math.max(1, img.naturalHeight - top - bottom);
+
+      var dx = x + (left / img.naturalWidth) * w;
+      var dy = y + (top / img.naturalHeight) * h;
+      var dw = (sw / img.naturalWidth) * w;
+      var dh = (sh / img.naturalHeight) * h;
+
+      ctx.save();
+      if (hide.blend.mirror) {
+        ctx.translate(dx + dw / 2, 0);
+        ctx.scale(-1, 1);
+        ctx.translate(-(dx + dw / 2), 0);
+      }
+      ctx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
+      ctx.restore();
+    }
+
+    return canvas;
+  }
+
   // The figure's box in scroller percentages, so pixel work can be done against
   // the same coordinate space the placement uses.
   function figureBox(node) {
@@ -1770,6 +1872,11 @@
         myHide: !!myHide,
         willPlace: forced || (!myHide && selectedScene === sceneSlug),
       });
+
+      // The composite needs the scene pixels, which hide mode loads. Outside hide
+      // mode it is loaded here so the spot modal has something to crop from.
+      if (!sceneBitmap) sceneBitmap = await loadScene();
+      compositeBitmap = await buildComposite(ranked);
 
       paintTabs();
       paintHud(mySpots);
