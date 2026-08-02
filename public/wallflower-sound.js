@@ -432,6 +432,15 @@
   function wireEvents() {
     ['hide', 'hit', 'miss', 'choose'].forEach(function (key) {
       document.addEventListener('wallflower:' + key, function () {
+        // A pick doubles as the gesture that turns sound on. The picker screens
+        // have no ambient music and picking is the only interaction, so gating
+        // the pop behind a separate sound-button press just meant the first few
+        // picks were silent. `choose` is dispatched synchronously inside the
+        // tile's click handler, so enabling audio here is still within a
+        // gesture and the browser allows it. hit/miss/hide are not self-
+        // enabling: they follow an async write, are off-gesture, and belong to
+        // the scene where the sound button is the deliberate switch.
+        if (key === 'choose' && !started) startSound();
         play(key);
       });
     });
