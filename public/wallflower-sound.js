@@ -551,7 +551,24 @@
     paintButton();
   }
 
+  // Both icons ship visible-by-default, because a CSS default that hides one is
+  // exactly what breaks when the stylesheet and the script disagree. The script
+  // settles it on the first tick instead, before paint.
+  function initIcons() {
+    all('[data-mute]').forEach(function (button) {
+      var off = one('[data-icon-muted]', button);
+      if (off) off.style.display = 'flex';
+
+      var on = one('[data-icon-on]', button);
+      if (on) on.style.display = 'none';
+    });
+  }
+
   async function start() {
+    // Runs before the awaited preference read, so the button never shows two
+    // icons while the network settles.
+    initIcons();
+
     await loadPrefs();
     paintPrefs();
     wireButton();
