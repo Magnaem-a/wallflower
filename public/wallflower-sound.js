@@ -153,7 +153,9 @@
   };
 
   function play(key) {
-    if (!prefs[key] || !sounds[key]) return;
+    // Nothing sounds until the button has been pressed — a UI sound firing
+    // while the button shows muted would contradict what the member sees.
+    if (!started || !prefs[key] || !sounds[key]) return;
     try {
       sounds[key]();
     } catch (err) {
@@ -212,9 +214,11 @@
 
     if (prefs.music) {
       ambience.play().catch(function () {
-        // Refused until a gesture. Reopen the gate so the next click starts it,
-        // rather than leaving the session flag claiming sound is running.
+        // Refused despite the session flag. Fall back to muted so the button
+        // tells the truth rather than claiming sound is running.
         started = false;
+        markEngaged(false);
+        paintButton();
       });
     }
   }
@@ -285,19 +289,6 @@
   // -------------------------------------------------------------------------
 
   function wirePanel() {
-    var button = one('[data-mute]');
-    var panel = one('[data-sound-panel]');
-
-    if (button && panel) {
-      button.addEventListener('click', function (event) {
-        event.stopPropagation();
-        var open = panel.style.display === 'flex';
-        panel.style.display = open ? 'none' : 'flex';
-        button.classList.toggle('is-open', !open);
-        closeAccount();
-      });
-    }
-
     all('[data-sound-row]').forEach(function (row) {
       row.addEventListener('click', function () {
         var key = row.dataset.soundRow;
@@ -407,18 +398,20 @@
   }
 
   // Browsers refuse audio until the page has been interacted with. That cannot
-  // be bypassed, so the first scene of a session needs one click.
+  // be bypassed — but rather than hiding it behind "click anywhere and music
+  // appears", the sound button is the gesture. It shows muted until pressed,
+  // and pressing it both grants permission and turns sound on. What the button
+  // shows is then always the truth.
   //
-  // After that, a flag in sessionStorage records that sound has been running.
-  // Every scene page is a full load — switching tabs, committing a hide, calling
-  // someone out — and without this each one would wait for another click.
-  // Browsers generally allow playback once engagement is established, so the
-  // attempt is made straight away and falls back to the click if refused.
+  // Once sound has run, a session flag lets later pages start immediately:
+  // every scene visit is a full page load, and asking for a click each time
+  // would be worse than asking once.
   var ENGAGED = 'wallflower:audio-engaged';
 
-  function markEngaged() {
+  function markEngaged(on) {
     try {
-      sessionStorage.setItem(ENGAGED, '1');
+      if (on) sessionStorage.setItem(ENGAGED, '1');
+      else sessionStorage.removeItem(ENGAGED);
     } catch (err) {}
   }
 
@@ -430,36 +423,74 @@
     }
   }
 
-  function wireFirstGesture() {
-    function begin() {
-      if (started) return;
-      started = true;
-      markEngaged();
-      audio();
-      if (prefs.music) startAmbience();
-    }
+  // Sound is off until the button says otherwise. `started` means audio is
+  // actually permitted and running, not merely that preferences allow it.
+  function paintButton() {
+    var button = one('[data-mute]');
+    if (button) button.classList.toggle('is-muted', !started);
+  }
 
-    // Sound was already running earlier this session, so try immediately rather
-    // than making the member click on every scene they visit.
+  function startSound() {
+    started = true;
+    markEngaged(true);
+    audio();
+    if (prefs.music) startAmbience();
+    paintButton();
+  }
+
+  function stopSound() {
+    started = false;
+    markEngaged(false);
+    if (ambience) ambience.pause();
+    paintButton();
+  }
+
+  // On the picker pages the button is the whole control — one sound, no panel.
+  // On a scene it opens the panel once sound is on, since there are four
+  // things to control and a popover is the only way to reach them.
+  function wireButton() {
+    var button = one('[data-mute]');
+    if (!button) return;
+
+    var panel = one('[data-sound-panel]');
+
+    button.addEventListener('click', function (event) {
+      event.stopPropagation();
+
+      if (!started) {
+        startSound();
+        return;
+      }
+
+      if (!panel) {
+        // No panel here, so the button is a plain mute toggle.
+        stopSound();
+        return;
+      }
+
+      var open = panel.style.display === 'flex';
+      panel.style.display = open ? 'none' : 'flex';
+      button.classList.toggle('is-open', !open);
+      closeAccount();
+    });
+
+    // Carried over from earlier in the session, so no click needed here.
     if (wasEngaged() && prefs.music) {
       started = true;
       audio();
       startAmbience();
     }
 
-    // Still listen either way: if the attempt above was refused, the next click
-    // starts it, and `started` guards against doing the work twice.
-    document.addEventListener('pointerdown', begin);
-    document.addEventListener('keydown', begin);
+    paintButton();
   }
 
   async function start() {
     await loadPrefs();
     paintPrefs();
+    wireButton();
     wirePanel();
     wireAccount();
     wireEvents();
-    wireFirstGesture();
     fillAccount();
   }
 
