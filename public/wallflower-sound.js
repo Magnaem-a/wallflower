@@ -124,11 +124,13 @@
   }
 
   var sounds = {
-    // Picking an avatar or a scene: a soft wooden tap. Should feel like setting
-    // a piece down, not like a notification.
+    // Picking an avatar or a scene: a soft round bubble-pop. It bends upward and
+    // sits high, which is most of what reads as cute — the old wooden knock,
+    // low and thudding, was the part that did not. Two quick notes so a member
+    // clicking through the grid gets a light patter, not a run of taps.
     choose: function () {
-      knock(0.18);
-      tone({ from: 420, to: 300, length: 0.09, volume: 0.08, type: 'triangle' });
+      tone({ from: 620, to: 880, length: 0.1, volume: 0.1, type: 'sine' });
+      tone({ from: 1240, length: 0.06, volume: 0.045, type: 'sine', delay: 0.05 });
     },
 
     // Committing a hide: lower and longer, a settling rather than a tap.
