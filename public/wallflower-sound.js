@@ -378,6 +378,12 @@
     face.addEventListener('click', function (event) {
       event.stopPropagation();
       var open = menu.style.display === 'flex';
+
+      // Filled on open, not at load. The status pill is painted by the game
+      // script after its Memberstack reads finish, so reading it on load
+      // captured whatever placeholder text the page shipped with.
+      if (!open) fillAccount();
+
       menu.style.display = open ? 'none' : 'flex';
 
       var panel = one('[data-sound-panel]');
@@ -425,10 +431,17 @@
       if (name) name.textContent = fields['user-name'] || 'you';
 
       // The status pill already works this out; reusing its text keeps the two
-      // from disagreeing.
+      // from disagreeing. Its own timer line carries the duration, so both are
+      // shown when present.
       var status = one('[data-status-title]');
+      var timer = one('[data-status-timer]');
       var state = one('[data-account-state]');
-      if (status && state) state.textContent = status.textContent.toLowerCase();
+
+      if (state && status) {
+        var line = status.textContent.trim();
+        var note = timer ? timer.textContent.trim() : '';
+        state.textContent = note ? line.toLowerCase() + ', ' + note : line.toLowerCase();
+      }
     } catch (err) {}
   }
 
