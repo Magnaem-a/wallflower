@@ -511,9 +511,15 @@
     });
 
     // Carried over from earlier in the session, so no click needed here.
+    //
+    // Only the ambience is resumed — it is an <audio> element, whose autoplay a
+    // browser will allow once the site has media engagement. The AudioContext
+    // used for the UI sounds is not created here: a fresh page load has had no
+    // gesture yet, and creating it now only earns a console warning while the
+    // context stays suspended. It is created lazily on the first UI sound, which
+    // is always a click.
     if (wasEngaged() && prefs.music) {
       started = true;
-      audio();
       startAmbience();
     }
 
