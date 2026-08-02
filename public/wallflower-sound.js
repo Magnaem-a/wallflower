@@ -152,11 +152,47 @@
     },
   };
 
+  // Ambience volume, and how far it drops while a UI sound plays.
+  var MUSIC_LEVEL = 0.28;
+  var DUCK_LEVEL = 0.09;
+  var duckTimer = null;
+
+  // Drops the music under a UI sound, then brings it back.
+  //
+  // Without this the two compete: the ambience sits in the same low register as
+  // the hide and miss tones, so a short cue at a comparable level reads as part
+  // of the track rather than as a response to something the member did. Ducking
+  // is what makes a UI sound land without needing to be loud.
+  function duck() {
+    if (!ambience || ambience.paused) return;
+
+    ambience.volume = DUCK_LEVEL;
+    clearTimeout(duckTimer);
+
+    // Eased back rather than snapped, so the recovery is not itself a noise.
+    duckTimer = setTimeout(function () {
+      if (!ambience) return;
+
+      var step = 0;
+      var back = setInterval(function () {
+        step++;
+        if (!ambience || step >= 12) {
+          if (ambience) ambience.volume = MUSIC_LEVEL;
+          clearInterval(back);
+          return;
+        }
+        ambience.volume = DUCK_LEVEL + (MUSIC_LEVEL - DUCK_LEVEL) * (step / 12);
+      }, 40);
+    }, 260);
+  }
+
   function play(key) {
     // Nothing sounds until the button has been pressed — a UI sound firing
     // while the button shows muted would contradict what the member sees.
     if (!started || !prefs[key] || !sounds[key]) return;
+
     try {
+      duck();
       sounds[key]();
     } catch (err) {
       // A sound failing must never interrupt the thing it was decorating.
@@ -195,7 +231,7 @@
 
     ambience = new Audio(url);
     ambience.loop = true;
-    ambience.volume = 0.28; // under the UI sounds; it is a background, not a track
+    ambience.volume = MUSIC_LEVEL; // under the UI sounds; a background, not a track
 
     try {
       var at = parseFloat(sessionStorage.getItem(positionKey()));

@@ -796,6 +796,8 @@
     if (cancelText) cancelText.textContent = 'Back to the scene';
 
     if (found) {
+      document.dispatchEvent(new CustomEvent('wallflower:hit'));
+
       // Show who it was, not the patch of scene — the reward for a hit is
       // finding out who you caught.
       var art = avatars[found.avatarId];
@@ -823,6 +825,8 @@
         pip.classList.remove('is-spent');
       });
     } else {
+      document.dispatchEvent(new CustomEvent('wallflower:miss'));
+
       if (crop) {
         crop.classList.remove('is-hit');
         crop.classList.add('is-miss');
@@ -1909,7 +1913,14 @@
         }
 
         setText('[data-commit-note]', 'you are hidden');
-        window.location.reload();
+        document.dispatchEvent(new CustomEvent('wallflower:hide'));
+
+        // The settle sound runs about 400ms. Reloading immediately cuts it off
+        // mid-note, so the reload waits for it to finish. Sound only — the write
+        // has already landed by this point.
+        setTimeout(function () {
+          window.location.reload();
+        }, 420);
       } catch (err) {
         // The real message, not a generic one — a silent failure here is what
         // made this look like the button did nothing.
