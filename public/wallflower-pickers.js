@@ -236,6 +236,10 @@ function initAvatarPicker(choice) {
 
   tiles.forEach(function (tile) {
     tile.addEventListener('click', function () {
+      // sounds.js listens for this. Fired on the click rather than inside
+      // choose(), because choose() also runs when restoring a saved selection
+      // on load — which is not something the member did.
+      document.dispatchEvent(new CustomEvent('wallflower:choose'));
       choose(tile, true);
     });
   });
@@ -293,6 +297,7 @@ function initScenePicker(choice) {
 
   rows.forEach(function (row) {
     row.addEventListener('click', function () {
+      document.dispatchEvent(new CustomEvent('wallflower:choose'));
       choose(row, true);
     });
   });
