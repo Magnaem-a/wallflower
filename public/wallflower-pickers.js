@@ -285,7 +285,24 @@ function initScenePicker(choice) {
 
     // Row thumbnail and featured image are the same CMS asset, so the swap is
     // instant rather than a fresh download.
-    if (featured.image && thumb) featured.image.setAttribute('src', thumb.getAttribute('src'));
+    //
+    // srcset has to be carried across, not just src. Webflow renders CMS images
+    // with a responsive srcset, and when one is present the browser picks from
+    // it and ignores src entirely — so setting src alone changed nothing on
+    // screen while the title and blurb swapped correctly.
+    if (featured.image && thumb) {
+      var nextSrc = thumb.getAttribute('src');
+      var nextSet = thumb.getAttribute('srcset');
+      var nextSizes = thumb.getAttribute('sizes');
+
+      if (nextSrc) featured.image.setAttribute('src', nextSrc);
+
+      if (nextSet) featured.image.setAttribute('srcset', nextSet);
+      else featured.image.removeAttribute('srcset');
+
+      if (nextSizes) featured.image.setAttribute('sizes', nextSizes);
+      else featured.image.removeAttribute('sizes');
+    }
     if (featured.title && name) featured.title.textContent = name.textContent;
     if (name) nameSelectedScene(name.textContent);
     if (featured.detail && blurb) featured.detail.textContent = blurb.textContent;
