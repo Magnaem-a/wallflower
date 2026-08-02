@@ -474,9 +474,21 @@
 
   // Sound is off until the button says otherwise. `started` means audio is
   // actually permitted and running, not merely that preferences allow it.
+  // The button carries two icons — a speaker and a crossed-out speaker — and the
+  // state swaps which one is visible. A colour change alone was not enough: a
+  // faded speaker reads as a slightly dimmer button, not as muted, so there was
+  // no way to tell the two states apart at a glance.
   function paintButton() {
     var button = one('[data-mute]');
-    if (button) button.classList.toggle('is-muted', !started);
+    if (!button) return;
+
+    button.classList.toggle('is-muted', !started);
+
+    var on = one('[data-icon-on]', button);
+    var off = one('[data-icon-muted]', button);
+
+    if (on) on.style.display = started ? 'flex' : 'none';
+    if (off) off.style.display = started ? 'none' : 'flex';
   }
 
   function startSound() {
