@@ -126,11 +126,13 @@
   var sounds = {
     // Picking an avatar or a scene: a soft round bubble-pop. It bends upward and
     // sits high, which is most of what reads as cute — the old wooden knock,
-    // low and thudding, was the part that did not. Two quick notes so a member
-    // clicking through the grid gets a light patter, not a run of taps.
+    // low and thudding, was the part that did not. Three quick ascending notes
+    // give it a bounce; kept quiet so clicking through the grid patters lightly
+    // rather than chirping.
     choose: function () {
-      tone({ from: 620, to: 880, length: 0.1, volume: 0.1, type: 'sine' });
-      tone({ from: 1240, length: 0.06, volume: 0.045, type: 'sine', delay: 0.05 });
+      tone({ from: 560, to: 960, length: 0.1, volume: 0.07, type: 'sine' });
+      tone({ from: 1180, length: 0.05, volume: 0.035, type: 'sine', delay: 0.05 });
+      tone({ from: 1560, length: 0.05, volume: 0.03, type: 'sine', delay: 0.1 });
     },
 
     // Committing a hide: lower and longer, a settling rather than a tap.
