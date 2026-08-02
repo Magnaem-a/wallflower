@@ -212,7 +212,9 @@
 
     if (prefs.music) {
       ambience.play().catch(function () {
-        // Refused until a gesture. The next click will start it.
+        // Refused until a gesture. Reopen the gate so the next click starts it,
+        // rather than leaving the session flag claiming sound is running.
+        started = false;
       });
     }
   }
@@ -404,18 +406,51 @@
     });
   }
 
-  // Audio is blocked until the page has been interacted with, so the ambience
-  // waits for the first click rather than trying and failing on load.
+  // Browsers refuse audio until the page has been interacted with. That cannot
+  // be bypassed, so the first scene of a session needs one click.
+  //
+  // After that, a flag in sessionStorage records that sound has been running.
+  // Every scene page is a full load — switching tabs, committing a hide, calling
+  // someone out — and without this each one would wait for another click.
+  // Browsers generally allow playback once engagement is established, so the
+  // attempt is made straight away and falls back to the click if refused.
+  var ENGAGED = 'wallflower:audio-engaged';
+
+  function markEngaged() {
+    try {
+      sessionStorage.setItem(ENGAGED, '1');
+    } catch (err) {}
+  }
+
+  function wasEngaged() {
+    try {
+      return sessionStorage.getItem(ENGAGED) === '1';
+    } catch (err) {
+      return false;
+    }
+  }
+
   function wireFirstGesture() {
     function begin() {
       if (started) return;
       started = true;
+      markEngaged();
       audio();
       if (prefs.music) startAmbience();
     }
 
-    document.addEventListener('pointerdown', begin, { once: true });
-    document.addEventListener('keydown', begin, { once: true });
+    // Sound was already running earlier this session, so try immediately rather
+    // than making the member click on every scene they visit.
+    if (wasEngaged() && prefs.music) {
+      started = true;
+      audio();
+      startAmbience();
+    }
+
+    // Still listen either way: if the attempt above was refused, the next click
+    // starts it, and `started` guards against doing the work twice.
+    document.addEventListener('pointerdown', begin);
+    document.addEventListener('keydown', begin);
   }
 
   async function start() {
