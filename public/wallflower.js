@@ -1977,17 +1977,42 @@
 
     scroller.appendChild(placing);
 
-    // Placing can be abandoned without committing, otherwise your own scene traps
-    // you in the panel with no way to read the board.
-    var back = one('[data-show-board]');
-    if (back) {
-      back.addEventListener('click', function () {
+    // The board and the blend panel swap both ways. Going to the board used to
+    // delete the placing figure, which made the trip one-way: coming back would
+    // have meant starting the placement over.
+    //
+    // The figure is hidden instead, so position, cuts, size and facing all
+    // survive the round trip.
+    var toBoard = one('[data-show-board]');
+    var toBlend = one('[data-show-blend]');
+
+    function showPlacing(visible) {
+      var current = one('[data-placing]');
+      if (current) current.style.display = visible ? 'block' : 'none';
+      if (toBlend) toBlend.style.display = visible ? 'none' : 'flex';
+    }
+
+    if (toBoard) {
+      toBoard.addEventListener('click', function () {
         showBoard();
-        var current = one('[data-placing]');
-        if (current) current.remove();
+        showPlacing(false);
         setHint('click anyone you think is a player');
       });
     }
+
+    if (toBlend) {
+      toBlend.addEventListener('click', function () {
+        var board = one('[data-board]');
+        var blendPanel = one('[data-blend-panel]');
+        if (board) board.classList.add('is-gone');
+        if (blendPanel) blendPanel.classList.add('is-shown');
+
+        showPlacing(true);
+        setHint('drag yourself anywhere in the scene');
+      });
+    }
+
+    showPlacing(true);
 
     currentAvatar = avatarSlug || null;
     await loadAvatarTone(currentAvatar);
