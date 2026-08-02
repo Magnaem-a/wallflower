@@ -135,10 +135,14 @@
       tone({ from: 1560, length: 0.05, volume: 0.03, type: 'sine', delay: 0.1 });
     },
 
-    // Committing a hide: lower and longer, a settling rather than a tap.
+    // Committing a hide: a bright little rising triad — you have tucked yourself
+    // away and it should feel pleased, not like a door thudding shut. Ascends
+    // G–C–E with a sparkle on top; kept under ~340ms so the commit reload, which
+    // waits for it, does not stall.
     hide: function () {
-      tone({ from: 260, to: 150, length: 0.34, volume: 0.14, type: 'sine' });
-      tone({ from: 130, to: 96, length: 0.42, volume: 0.09, type: 'sine', delay: 0.04 });
+      tone({ from: 392, to: 523, length: 0.14, volume: 0.12, type: 'triangle' });
+      tone({ from: 659, length: 0.22, volume: 0.11, type: 'triangle', delay: 0.1 });
+      tone({ from: 988, length: 0.14, volume: 0.05, type: 'sine', delay: 0.2 });
     },
 
     // Finding someone: two rising notes. The only sound in the game that goes
@@ -440,7 +444,7 @@
         // gesture and the browser allows it. hit/miss/hide are not self-
         // enabling: they follow an async write, are off-gesture, and belong to
         // the scene where the sound button is the deliberate switch.
-        if (key === 'choose' && !started) startSound();
+        if (key === 'choose' && !started && !isMuted()) startSound();
         play(key);
       });
     });
@@ -472,6 +476,29 @@
     }
   }
 
+  // Whether the member has deliberately muted. Separate from "not engaged yet":
+  // both leave `started` false, but a pick auto-enables sound only in the first
+  // case. Without this a mute never held on the picker screens — muting, then
+  // picking, turned sound straight back on, because the pick counts as the
+  // enable gesture. Held in sessionStorage so the mute survives the page loads
+  // between one pick and the next.
+  var MUTED = 'wallflower:audio-muted';
+
+  function setMuted(on) {
+    try {
+      if (on) sessionStorage.setItem(MUTED, '1');
+      else sessionStorage.removeItem(MUTED);
+    } catch (err) {}
+  }
+
+  function isMuted() {
+    try {
+      return sessionStorage.getItem(MUTED) === '1';
+    } catch (err) {
+      return false;
+    }
+  }
+
   // Sound is off until the button says otherwise. `started` means audio is
   // actually permitted and running, not merely that preferences allow it.
   // The button carries two icons — a speaker and a crossed-out speaker — and the
@@ -494,6 +521,7 @@
   function startSound() {
     started = true;
     markEngaged(true);
+    setMuted(false);
     audio();
     if (prefs.music) startAmbience();
     paintButton();
@@ -502,6 +530,7 @@
   function stopSound() {
     started = false;
     markEngaged(false);
+    setMuted(true);
     if (ambience) ambience.pause();
     paintButton();
   }
@@ -517,6 +546,14 @@
 
     button.addEventListener('click', function (event) {
       event.stopPropagation();
+
+      // Always warm the context on this press — it is a real gesture, and a
+      // session carried over from an earlier page set `started` true without
+      // ever creating it (that is deferred off page load to avoid a console
+      // warning). Without this, pressing the HUD button just opened the panel
+      // while every cue stayed silent, so sound only ever came back through the
+      // panel's own controls.
+      audio();
 
       if (!started) {
         startSound();
